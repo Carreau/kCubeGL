@@ -30,9 +30,7 @@
       <div class="hud-row">
         <span class="badge">Level <b id="level">1</b></span>
         <span class="badge">Moves <b id="moves">0</b></span>
-        <span class="badge">Cubes <b id="cubes">0</b></span>
-        <span class="badge">Best <b id="best">–</b></span>
-        <span class="badge">World <b id="world">–</b></span>
+        <button id="infoBtn" type="button" class="info-btn" title="Show info">ⓘ</button>
       </div>
       <div class="hud-row tools">
         <button id="solveBtn" type="button">Show solution</button>
@@ -40,14 +38,44 @@
       </div>
     </div>
 
-    <!-- Instructions -->
-    <div id="help">
-      <b>Arrow keys</b> roll the selected cube into an empty cell, or re-select an
-      adjacent cube. Make every cube show the <span id="help-target">same</span>
-      colour on top <b>and</b> form one connected block (touching N/S/E/W) before
-      you run out of moves.
-      <div class="keys">↑ ↓ ← → &nbsp;·&nbsp; <b>Q/E</b> rotate view &nbsp;·&nbsp; <b>R</b> retry &nbsp;·&nbsp; <b>S</b> solution &nbsp;·&nbsp; <b>M</b> levels &nbsp;·&nbsp; <b>Enter</b> next</div>
+    <!-- Info Panel (hidden by default) -->
+    <div id="infoPanel" class="info-panel hidden">
+      <div class="info-content">
+        <div class="info-section">
+          <h3>Objective</h3>
+          <p>Make every cube show the <span id="help-target">same</span> colour on top <b>and</b> form one connected block (touching N/S/E/W).</p>
+        </div>
+        <div class="info-row">
+          <div class="info-stat">
+            <span class="label">Cubes</span>
+            <span class="value" id="info-cubes">0</span>
+          </div>
+          <div class="info-stat">
+            <span class="label">Best</span>
+            <span class="value" id="info-best">–</span>
+          </div>
+          <div class="info-stat">
+            <span class="label">World</span>
+            <span class="value" id="info-world">–</span>
+          </div>
+        </div>
+        <div class="info-section">
+          <h3>Controls</h3>
+          <div class="control-keys">
+            <div class="key-row"><span class="key">↑ ↓ ← →</span> <span class="desc">Roll cube</span></div>
+            <div class="key-row"><span class="key">Q/E</span> <span class="desc">Rotate view</span></div>
+            <div class="key-row"><span class="key">R</span> <span class="desc">Retry</span></div>
+            <div class="key-row"><span class="key">S</span> <span class="desc">Solution</span></div>
+            <div class="key-row"><span class="key">M</span> <span class="desc">Levels</span></div>
+            <div class="key-row"><span class="key">Enter</span> <span class="desc">Next</span></div>
+          </div>
+        </div>
+      </div>
+      <button id="infoCloseBtn" type="button" class="info-close">✕</button>
     </div>
+
+    <!-- Instructions (hidden by default) -->
+    <div id="help" class="hidden"></div>
 
     <!-- Center overlay for win / fail messages -->
     <div id="overlay" class="hidden">

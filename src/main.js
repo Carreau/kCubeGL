@@ -353,9 +353,9 @@ const game = {
 const el = {
   level: document.getElementById("level"),
   moves: document.getElementById("moves"),
-  cubes: document.getElementById("cubes"),
-  best: document.getElementById("best"),
-  world: document.getElementById("world"), // world-best badge (backend only)
+  cubes: document.getElementById("info-cubes"),
+  best: document.getElementById("info-best"),
+  world: document.getElementById("info-world"), // world-best badge (backend only)
   user: document.getElementById("user"), // "playing as" label (backend only)
   overlay: document.getElementById("overlay"),
   title: document.getElementById("overlay-title"),
@@ -363,6 +363,9 @@ const el = {
   btn: document.getElementById("overlay-btn"),
   solveBtn: document.getElementById("solveBtn"),
   menuBtn: document.getElementById("menuBtn"),
+  infoBtn: document.getElementById("infoBtn"),
+  infoPanel: document.getElementById("infoPanel"),
+  infoCloseBtn: document.getElementById("infoCloseBtn"),
 };
 
 function cubeAt(row, col) {
@@ -1003,6 +1006,11 @@ function goToLevels() {
 el.btn.addEventListener("click", overlayAction);
 el.solveBtn.addEventListener("click", () => { showSolution(); el.solveBtn.blur(); });
 el.menuBtn.addEventListener("click", () => { if (!game.solving) goToLevels(); el.menuBtn.blur(); });
+el.infoBtn.addEventListener("click", () => { el.infoPanel.classList.remove("hidden"); el.infoBtn.blur(); });
+el.infoCloseBtn.addEventListener("click", () => { el.infoPanel.classList.add("hidden"); });
+el.infoPanel.addEventListener("click", (e) => {
+  if (e.target === el.infoPanel) el.infoPanel.classList.add("hidden");
+});
 
 window.addEventListener("keydown", (e) => {
   // Q/E orbit the view around the vertical axis, in any state.

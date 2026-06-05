@@ -39,7 +39,11 @@ try {
   await page.waitForURL(/play\.html\?level=1/, { timeout: 10000 });
   await page.waitForTimeout(1500); // game init + Three.js from CDN
 
-  const cubes = Number(await page.$eval("#cubes", (e) => e.textContent));
+  // Open info panel to access cube count
+  await page.click("#infoBtn");
+  await page.waitForTimeout(200);
+
+  const cubes = Number(await page.$eval("#info-cubes", (e) => e.textContent));
   const moves = Number(await page.$eval("#moves", (e) => e.textContent));
   if (!(cubes > 0)) fail(`expected cubes > 0, got ${cubes}`);
   if (!(moves > 0)) fail(`expected a move budget > 0, got ${moves}`);
