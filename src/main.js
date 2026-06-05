@@ -27,6 +27,7 @@ const STORE_KEY = "kcube.v1"; // localStorage key for persisted scores
 const DEBUG_SOLVE = true;
 const SOLVE_ROLL_MS = 420; // roll duration while auto-solving (vs ROLL_MS)
 const SOLVE_STEP_MS = 380; // pause between solution moves
+const SOLVE_CURSOR_MS = 130; // per-cube step as the cursor walks between solution moves
 
 // Six distinct face colours. Index doubles as the "face id".
 const COLORS = [
@@ -333,6 +334,7 @@ const game = {
   initial: [], // snapshot of the scrambled start, for replaying the solution
   solving: false, // true while auto-playing the solution
   solveQueue: [],
+  walk: null, // active cursor-walk animation between solution moves
 };
 
 const el = {
@@ -454,6 +456,29 @@ function islandOf(cube) {
   return island;
 }
 
+// Shortest route of cubes from `from` to `to`, stepping only between cubes that
+// are 4-neighbours (the moves a cursor can make). BFS over the island graph;
+// returns the cube path inclusive of both ends, or null if `to` isn't reachable
+// (shouldn't happen — the scramble keeps every solution move inside one island).
+function cursorPath(from, to) {
+  if (from === to) return [from];
+  const prev = new Map();
+  const seen = new Set([from]);
+  const queue = [from];
+  for (let i = 0; i < queue.length; i++) {
+    const c = queue[i];
+    if (c === to) break;
+    for (const [dr, dc] of NEI) {
+      const n = cubeAt(c.row + dr, c.col + dc);
+      if (n && !seen.has(n)) { seen.add(n); prev.set(n, c); queue.push(n); }
+    }
+  }
+  if (!seen.has(to)) return null;
+  const path = [to];
+  for (let c = to; c !== from; ) { c = prev.get(c); path.push(c); }
+  return path.reverse();
+}
+
 // Apply a roll to logical + mesh state instantly (no animation).
 function applyRollLogic(cube, dir, nr, nc) {
   const q = new THREE.Quaternion().setFromAxisAngle(dir.axis, dir.angle);
@@ -541,6 +566,7 @@ function buildLevel(level) {
     : 0;
   game.solving = false;
   game.solveQueue = [];
+  game.walk = null;
 
   tintBoard(game.targetColor);
   updateCursor(true);
@@ -638,6 +664,32 @@ function stepRoll(dt) {
   }
 }
 
+// Glide the auto-solve cursor along a path of cubes (from cursorPath), easing
+// between each adjacent pair, then run `onDone` (the actual roll). This replaces
+// the old teleport when consecutive solution moves sit on different cubes.
+function startCursorWalk(path, onDone) {
+  const pts = path.map((c) => ({ x: cellX(c.col), z: cellZ(c.row) }));
+  game.walk = { pts, seg: 0, t: 0, onDone };
+}
+
+function stepWalk(dt) {
+  const w = game.walk;
+  w.t += dt / SOLVE_CURSOR_MS;
+  // carry the residual into later segments if a frame spanned more than one
+  while (w.t >= 1 && w.seg < w.pts.length - 2) { w.t -= 1; w.seg += 1; }
+  const onLast = w.seg >= w.pts.length - 2;
+  const s = onLast ? Math.min(w.t, 1) : w.t;
+  const a = w.pts[w.seg], b = w.pts[w.seg + 1];
+  const e = s < 0.5 ? 2 * s * s : 1 - Math.pow(-2 * s + 2, 2) / 2; // ease per step
+  cursor.position.x = a.x + (b.x - a.x) * e;
+  cursor.position.z = a.z + (b.z - a.z) * e;
+  if (onLast && w.t >= 1) {
+    const done = w.onDone;
+    game.walk = null;
+    done();
+  }
+}
+
 function afterMove() {
   if (isSolved()) {
     game.state = "won";
@@ -726,13 +778,13 @@ function solutionStep() {
     return;
   }
   const { cube, key } = game.solveQueue.shift();
+  const from = game.cubes[game.selected];
 
   // DEBUG: a human cursor can only travel within one island, so each solution
   // move must roll a cube that shares an island with the cube the cursor is
   // resting on (where the previous move left it). Log every step, and shout +
   // dump a repro if one ever jumps to a cube in a disconnected island.
   if (DEBUG_SOLVE) {
-    const from = game.cubes[game.selected];
     const island = islandOf(from);
     const reachable = island.includes(cube);
     const step = game.solution.length - game.solveQueue.length;
@@ -750,10 +802,18 @@ function solutionStep() {
     }
   }
 
-  game.selected = game.cubes.indexOf(cube);
-  updateCursor(true);
-  const dir = DIRS[key];
-  startRoll(cube, dir, cube.row + dir.dr, cube.col + dir.dc, false);
+  // The cursor rides the cube it rolls, so it must first travel to that cube.
+  // Walk it there cube-by-cube along the island instead of teleporting; once it
+  // arrives, perform the actual roll.
+  const roll = () => {
+    game.selected = game.cubes.indexOf(cube);
+    updateCursor(true);
+    const dir = DIRS[key];
+    startRoll(cube, dir, cube.row + dir.dr, cube.col + dir.dc, false);
+  };
+  const path = cursorPath(from, cube);
+  if (path && path.length > 1) startCursorWalk(path, roll);
+  else roll();
 }
 
 // DEBUG: everything needed to replay a level offline — each cube's scrambled
@@ -854,6 +914,7 @@ function retryLevel() {
       : 0;
     game.solving = false;
     game.solveQueue = [];
+    game.walk = null;
     tintBoard(game.targetColor);
     updateCursor(true);
     updateHud();
@@ -922,6 +983,7 @@ function loop(now) {
   last = now;
 
   if (game.anim) stepRoll(dt);
+  else if (game.walk) stepWalk(dt);
 
   // ease the camera toward its target yaw
   if (Math.abs(camYawTarget - camYaw) > 1e-4) {
