@@ -20,6 +20,14 @@ const HALF = S / 2;
 const ROLL_MS = 170; // duration of a roll animation
 const STORE_KEY = "kcube.v1"; // localStorage key for persisted scores
 
+/* DEBUG: show-solution instrumentation. While DEBUG_SOLVE is on, every auto-play
+ * step is logged and any cursor island-jump (next cube unreachable from where the
+ * cursor sits) is flagged with a copy-pasteable repro. Playback is also slowed so
+ * a violation is easy to watch and capture. */
+const DEBUG_SOLVE = true;
+const SOLVE_ROLL_MS = 420; // roll duration while auto-solving (vs ROLL_MS)
+const SOLVE_STEP_MS = 380; // pause between solution moves
+
 // Six distinct face colours. Index doubles as the "face id".
 const COLORS = [
   { name: "white", hex: 0xf2f3f5 },
@@ -596,7 +604,7 @@ function startRoll(cube, dir, nr, nc, cost) {
 
 function stepRoll(dt) {
   const a = game.anim;
-  a.t = Math.min(1, a.t + dt / ROLL_MS);
+  a.t = Math.min(1, a.t + dt / (game.solving ? SOLVE_ROLL_MS : ROLL_MS));
   // ease-in-out for a satisfying tip
   const e = a.t < 0.5 ? 2 * a.t * a.t : 1 - Math.pow(-2 * a.t + 2, 2) / 2;
   const angle = a.dir.angle * e;
@@ -612,7 +620,7 @@ function stepRoll(dt) {
     a.cube.syncMesh();
     game.anim = null;
     updateCursor(false);
-    if (game.solving) solutionStep();
+    if (game.solving) setTimeout(solutionStep, SOLVE_STEP_MS); // slowed pause between moves
     else afterMove();
   } else {
     updateCursor(false);
@@ -664,13 +672,38 @@ function showSolution() {
   game.solving = true;
   game.state = "solving";
   game.solveQueue = game.solution.slice();
-  game.selected = 0;
+  // Begin on the first cube the solution rolls — the same spot a player starts —
+  // so the opening step is trivially in-island (matches the player's cursor too).
+  game.selected = game.cubes.indexOf(game.solveQueue[0].cube);
   updateCursor(true);
   updateHud();
+  if (DEBUG_SOLVE) logSolveStart();
   solutionStep();
 }
 
+// DEBUG: the t=0 picture — where the cursor begins, which cube the first move
+// rolls, whether that cube is reachable from the cursor, and how the scrambled
+// board splits into islands. (Starting the cursor on the first solution cube
+// makes this trivially reachable; logging it makes the invariant observable.)
+function logSolveStart() {
+  const start = game.cubes[game.selected];
+  const first = game.solveQueue[0].cube;
+  const seen = new Set();
+  const islands = [];
+  for (const c of game.cubes) {
+    if (seen.has(c)) continue;
+    const isl = islandOf(c);
+    isl.forEach((k) => seen.add(k));
+    islands.push(isl.map((k) => `(${k.row},${k.col})`).join(""));
+  }
+  console.log(
+    `[solve] t=0: cursor@(${start.row},${start.col}) · first move rolls @(${first.row},${first.col}) · ` +
+    `reachable=${islandOf(start).includes(first)} · ${islands.length} island(s): ${islands.join(" | ")}`
+  );
+}
+
 function solutionStep() {
+  if (!game.solving) return; // stale step (e.g. a pending timer after exit) — ignore
   if (game.solveQueue.length === 0) {
     game.solving = false;
     game.state = "lost"; // not a legitimate clear — offer a retry
@@ -682,10 +715,42 @@ function solutionStep() {
     return;
   }
   const { cube, key } = game.solveQueue.shift();
+
+  // DEBUG: a human cursor can only travel within one island, so each solution
+  // move must roll a cube that shares an island with the cube the cursor is
+  // resting on (where the previous move left it). Log every step, and shout +
+  // dump a repro if one ever jumps to a cube in a disconnected island.
+  if (DEBUG_SOLVE) {
+    const from = game.cubes[game.selected];
+    const island = islandOf(from);
+    const reachable = island.includes(cube);
+    const step = game.solution.length - game.solveQueue.length;
+    (reachable ? console.log : console.error)(
+      `[solve] step ${step}/${game.solution.length}: ` +
+      `cursor@(${from.row},${from.col}) → roll @(${cube.row},${cube.col}) ${key} · ` +
+      `same island=${reachable} (island ${island.length}/${game.cubes.length} cubes)`
+    );
+    if (!reachable) {
+      console.error(
+        "[solve] ⛔ VIOLATION: the next cube is in a DIFFERENT island — a cursor " +
+        "cannot reach it. Copy the repro below and send it back."
+      );
+      dumpRepro();
+    }
+  }
+
   game.selected = game.cubes.indexOf(cube);
   updateCursor(true);
   const dir = DIRS[key];
   startRoll(cube, dir, cube.row + dir.dr, cube.col + dir.dc, false);
+}
+
+// DEBUG: everything needed to replay a level offline — each cube's scrambled
+// start cell and the full solution as [cubeIndex, directionKey] pairs.
+function dumpRepro() {
+  const starts = game.cubes.map((c, i) => [game.initial[i].row, game.initial[i].col]);
+  const solution = game.solution.map((m) => [game.cubes.indexOf(m.cube), m.key]);
+  console.error("[solve] REPRO " + JSON.stringify({ level: game.level, starts, solution }));
 }
 
 /* --- Presentation: cursor + HUD -------------------------------------------- */
@@ -771,7 +836,11 @@ function retryLevel() {
     restoreInitial();
     game.moves = game.startMoves;
     game.movesUsed = 0;
-    game.selected = 0; // same initial cursor placement
+    // Same opening cursor as a fresh build — on the first solution cube, so par
+    // is reachable from the start (cubes[0] often sits in a different island).
+    game.selected = game.solution.length
+      ? game.cubes.indexOf(game.solution[0].cube)
+      : 0;
     game.solving = false;
     game.solveQueue = [];
     tintBoard(game.targetColor);
