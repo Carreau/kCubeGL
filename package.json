@@ -1,0 +1,13 @@
+{
+  "name": "kcubegl",
+  "version": "1.0.0",
+  "private": true,
+  "description": "kCube — a 3D dice-rolling puzzle playable in the browser (WebGL via Three.js).",
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve -l 8080 .",
+    "dev": "python3 -m http.server 8080"
+  },
+  "keywords": ["webgl", "three.js", "puzzle", "game"],
+  "license": "MIT"
+}
