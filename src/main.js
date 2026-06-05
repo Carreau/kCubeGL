@@ -418,13 +418,17 @@ function levelParams(level) {
   return { numCubes, scramble };
 }
 
-function scrambleRoll(cube) {
+function scrambleRoll(cube, forbidKey = null) {
   // Pick a random direction whose target cell is on-board and empty, then roll.
   // Islands are allowed — a cube may roll away from its neighbours, even sailing
-  // off alone. Returns the direction key used (so the scramble can be replayed),
-  // or null if the cube is boxed in.
+  // off alone. forbidKey (when set) is skipped so we never tip the same cube
+  // straight back the way it just came: that exact-opposite roll is a no-op that
+  // wastes a scramble step and shows up as a pointless there-and-back wobble in
+  // the solution playback. Returns the direction key used (so the scramble can be
+  // replayed), or null if the cube is boxed in.
   const keys = Object.keys(DIRS).sort(() => Math.random() - 0.5);
   for (const k of keys) {
+    if (k === forbidKey) continue;
     const d = DIRS[k];
     const nr = cube.row + d.dr, nc = cube.col + d.dc;
     if (!inBounds(nr, nc) || occupied(nr, nc)) continue;
@@ -482,9 +486,14 @@ function buildLevel(level) {
     guard++;
     // Try cubes from the cursor's island, in random order, until one can roll.
     const island = islandOf(cursorCube).sort(() => Math.random() - 0.5);
+    const prev = scrambleMoves[scrambleMoves.length - 1];
     let rolled = null;
     for (const cube of island) {
-      const k = scrambleRoll(cube);
+      // Re-rolling the cube we just moved, in the opposite direction, would undo
+      // the previous step — forbid that one direction so the scramble keeps
+      // making progress (and the reversed solution has no there-and-back pairs).
+      const forbid = prev && prev.cube === cube ? OPPOSITE[prev.key] : null;
+      const k = scrambleRoll(cube, forbid);
       if (k) { rolled = { cube, key: k }; break; }
     }
     if (!rolled) continue; // island fully boxed in (rare) — retry, guard bounds it
@@ -498,8 +507,10 @@ function buildLevel(level) {
   // If by luck the scramble produced an already-solved board, nudge once more
   // from the current cursor's island so the extra move stays cursor-reachable.
   if (isSolved()) {
+    const prev = scrambleMoves[scrambleMoves.length - 1];
     for (const cube of islandOf(cursorCube).sort(() => Math.random() - 0.5)) {
-      const k = scrambleRoll(cube);
+      const forbid = prev && prev.cube === cube ? OPPOSITE[prev.key] : null;
+      const k = scrambleRoll(cube, forbid);
       if (k) { scrambleMoves.push({ cube, key: k }); break; }
     }
   }
