@@ -9,7 +9,8 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
     }
   }
   </script>
@@ -24,6 +25,11 @@
         <span class="badge">Level <b id="level">1</b></span>
         <span class="badge">Moves <b id="moves">0</b></span>
         <span class="badge">Cubes <b id="cubes">0</b></span>
+        <span class="badge">Best <b id="best">–</b></span>
+      </div>
+      <div class="hud-row tools">
+        <button id="solveBtn" type="button">Show solution</button>
+        <button id="menuBtn" type="button">Levels</button>
       </div>
     </div>
 
@@ -31,8 +37,9 @@
     <div id="help">
       <b>Arrow keys</b> roll the selected cube into an empty cell, or re-select an
       adjacent cube. Make every cube show the <span id="help-target">same</span>
-      colour on top before you run out of moves.
-      <div class="keys">↑ ↓ ← → &nbsp;·&nbsp; <b>R</b> retry &nbsp;·&nbsp; <b>Enter</b> next</div>
+      colour on top <b>and</b> form one connected block (touching N/S/E/W) before
+      you run out of moves.
+      <div class="keys">↑ ↓ ← → &nbsp;·&nbsp; <b>Q/E</b> rotate view &nbsp;·&nbsp; <b>R</b> retry &nbsp;·&nbsp; <b>S</b> solution &nbsp;·&nbsp; <b>Enter</b> next</div>
     </div>
 
     <!-- Center overlay for win / fail messages -->
