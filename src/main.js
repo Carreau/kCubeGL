@@ -395,11 +395,12 @@ function connectedCells(n) {
 
 /* --- Level generation ------------------------------------------------------
  * Start from a solved board (all cubes identity-oriented => white up) placed in
- * a single contiguous block, then apply N random reverse-rolls. Each scramble
- * step is a legal roll that also keeps the board a single 4-connected block, so
- * reversing the sequence solves the board AND every move stays reachable by a
- * cursor that can only hop between adjacent cubes => guaranteed human-solvable.
- * The recorded reverse sequence powers "show solution".
+ * a single contiguous block, then apply N random reverse-rolls. Islands are
+ * allowed to form, but each roll moves a cube from the *current cursor's* island
+ * (the cursor rides the cube it just rolled). Since the cursor can only travel
+ * within one island, reversing this sequence yields a route the cursor can
+ * actually walk back to the contiguous, uniform start => guaranteed
+ * human-solvable. The recorded reverse sequence powers "show solution".
  * ------------------------------------------------------------------------- */
 
 function levelParams(level) {
@@ -409,30 +410,35 @@ function levelParams(level) {
 }
 
 function scrambleRoll(cube) {
-  // Pick a random direction whose target cell is on-board, empty, AND keeps the
-  // whole board a single 4-connected block. The connectivity guard is essential:
-  // the player's cursor can only hop between N/S/E/W-adjacent cubes, so if a
-  // scramble ever fragmented the board into disjoint clusters the reverse
-  // sequence (our "par" solution) would require the cursor to teleport between
-  // clusters — impossible for a human. Keeping the block contiguous at every
-  // step guarantees the recorded solution is actually playable.
-  // Returns the direction key used (so the scramble can be replayed), or null.
+  // Pick a random direction whose target cell is on-board and empty, then roll.
+  // Islands are allowed — a cube may roll away from its neighbours, even sailing
+  // off alone. Returns the direction key used (so the scramble can be replayed),
+  // or null if the cube is boxed in.
   const keys = Object.keys(DIRS).sort(() => Math.random() - 0.5);
   for (const k of keys) {
     const d = DIRS[k];
     const nr = cube.row + d.dr, nc = cube.col + d.dc;
     if (!inBounds(nr, nc) || occupied(nr, nc)) continue;
-    if (!rollKeepsContiguous(cube, nr, nc)) continue;
     applyRollLogic(cube, d, nr, nc);
     return k;
   }
   return null;
 }
 
-// Would moving `cube` to (nr,nc) leave every cube in one 4-connected block?
-function rollKeepsContiguous(cube, nr, nc) {
-  const cells = game.cubes.map((c) => (c === cube ? [nr, nc] : [c.row, c.col]));
-  return cellsConnected(cells);
+// All cubes 4-connected to `cube` (its island), including `cube` itself. The
+// player's cursor can only travel within one island, so the next scramble roll
+// must come from here.
+function islandOf(cube) {
+  const island = [cube];
+  const seen = new Set([cube]);
+  for (let i = 0; i < island.length; i++) {
+    const c = island[i];
+    for (const [dr, dc] of NEI) {
+      const n = cubeAt(c.row + dr, c.col + dc);
+      if (n && !seen.has(n)) { seen.add(n); island.push(n); }
+    }
+  }
+  return island;
 }
 
 // Apply a roll to logical + mesh state instantly (no animation).
@@ -453,24 +459,40 @@ function buildLevel(level) {
   // place cubes as a single contiguous block, solved orientation
   for (const [r, c] of connectedCells(numCubes)) game.cubes.push(new Cube(r, c));
 
-  // scramble with random reverse-rolls, recording each so the exact reverse can
-  // be replayed as the solution
+  // Scramble with random reverse-rolls, recording each so the exact reverse can
+  // be replayed as the solution. The cursor can only hop between cubes sharing an
+  // island, so each roll must move a cube from the *current* cursor cube's island
+  // (the cursor follows whichever cube was just rolled). A lone cube forms its own
+  // island and can sail across the board, ferrying the cursor to a new cluster.
+  // Honouring this at scramble time guarantees the reversed sequence is a route a
+  // human cursor can actually walk.
   const scrambleMoves = [];
+  let cursorCube = game.cubes[0];
   let applied = 0, guard = 0;
-  while (applied < scramble && guard < scramble * 20) {
+  while (applied < scramble && guard < scramble * 40) {
     guard++;
-    const cube = game.cubes[randInt(game.cubes.length)];
-    const k = scrambleRoll(cube);
-    if (k) { applied++; scrambleMoves.push({ cube, key: k }); }
+    // Try cubes from the cursor's island, in random order, until one can roll.
+    const island = islandOf(cursorCube).sort(() => Math.random() - 0.5);
+    let rolled = null;
+    for (const cube of island) {
+      const k = scrambleRoll(cube);
+      if (k) { rolled = { cube, key: k }; break; }
+    }
+    if (!rolled) continue; // island fully boxed in (rare) — retry, guard bounds it
+    scrambleMoves.push(rolled);
+    cursorCube = rolled.cube; // cursor rides along with the cube it just rolled
+    applied++;
   }
 
   game.targetColor = SOLVED_COLOR;
 
-  // If by luck the scramble produced an already-solved board, nudge once more.
+  // If by luck the scramble produced an already-solved board, nudge once more
+  // from the current cursor's island so the extra move stays cursor-reachable.
   if (isSolved()) {
-    const cube = game.cubes[randInt(game.cubes.length)];
-    const k = scrambleRoll(cube);
-    if (k) scrambleMoves.push({ cube, key: k });
+    for (const cube of islandOf(cursorCube).sort(() => Math.random() - 0.5)) {
+      const k = scrambleRoll(cube);
+      if (k) { scrambleMoves.push({ cube, key: k }); break; }
+    }
   }
 
   // Solution = scramble reversed, each roll undone in the opposite direction.
@@ -485,13 +507,17 @@ function buildLevel(level) {
     cube: c, row: c.row, col: c.col, quat: c.mesh.quaternion.clone(),
   }));
 
-  // Move budget. The scramble keeps the board a single connected block, so the
-  // reverse sequence is always cursor-reachable and solvable in `scramble` rolls
-  // (cursor hops between adjacent cubes are free). Par stays generously above
-  // that raw count to leave room for imperfect, exploratory play.
+  // Move budget. Each scramble roll stayed inside the cursor's island, so the
+  // reversed sequence is a route the cursor can actually walk and the board is
+  // solvable in `scramble` rolls (cursor hops within an island are free). Par
+  // stays generously above that raw count to leave room for exploratory play.
   game.moves = scramble + game.cubes.length * 3 + 4 + game.bonus;
   game.movesUsed = 0;
-  game.selected = 0;
+  // Start the cursor on the first cube of the solution (the last-scrambled cube)
+  // so par is reachable from the opening position, not just by "show solution".
+  game.selected = game.solution.length
+    ? game.cubes.indexOf(game.solution[0].cube)
+    : 0;
   game.solving = false;
   game.solveQueue = [];
 
