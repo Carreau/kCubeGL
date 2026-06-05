@@ -2,41 +2,40 @@
 
 Project status, scope, and future considerations for kCubeGL.
 
-## Current Scope (v1 - Complete)
+## Current Scope (v2 — adds a backend)
 
 ### Implemented
-- ✅ 5×5 board with 3–10 cubes per level
-- ✅ Bevelled dice with randomized orientations
-- ✅ Arrow-key cursor with 4-direction rolling
+- ✅ 5×5 board, bevelled dice, arrow-key cursor with 4-direction rolling
 - ✅ Animated tip-over (true 3D quaternion rotations)
 - ✅ Guaranteed-solvable level generation (reverse-scrambling)
+- ✅ **Deterministic levels** — generation is seeded by the level number, so level N is the same puzzle for everyone (basis for fair leaderboards)
 - ✅ Contiguous-block win condition (connectivity + same color)
-- ✅ Move budget economy (scales with cube count and scramble length)
-- ✅ Carried move bonus (extra move from prior level → next level)
-- ✅ Q/E view rotation
-- ✅ Solution playback (reverses stored scramble sequence)
-- ✅ Best-score persistence and level replay (localStorage)
-- ✅ Win/lose/level-picker flow
-- ✅ Integration smoke test (Playwright, headless browser)
+- ✅ Move budget economy + carried move bonus
+- ✅ Q/E view rotation, solution playback
+- ✅ Best-score persistence (localStorage) — works with no backend
+- ✅ Win/lose flow
+- ✅ **Real landing page** (`index.html`) — level grid with your best / world best, sign-in, per-level leaderboard + difficulty detail; game lives at `play.html?level=N`
+- ✅ **SQLite backend** (`node:sqlite`, no native deps) — `server/server.mjs` serves the game + a JSON API
+- ✅ **Username accounts** (bearer-token, no password)
+- ✅ **Leaderboards** (fewest moves per level, tie-broken by time)
+- ✅ **Per-attempt tracking** (won / lost / abandoned, moves, duration) → puzzle-difficulty and player-skill aggregates
+- ✅ Tests: API integration (`test/api.mjs`) + headless browser smoke (`test/smoke.mjs`)
 
-### Deliberately Out of Scope (v1)
-- ❌ **Sound** — no audio feedback
-- ❌ **Timer** — no time pressure
-- ❌ **Undo** — no move-by-move backtracking
-- ❌ **Difficulty progression** — level difficulty (move budget) does not ramp systematically
-- ❌ **Mobile touch controls** — only keyboard input
-- ❌ **Accessibility** — no ARIA labels, alt text, or screen-reader support
-- ❌ **Analytics** — no usage tracking
+### Deliberately Out of Scope
+- ❌ **Passwords / sessions** — accounts are name + token only (a token in localStorage); no recovery or cross-device sync yet
+- ❌ **Sound / Timer-pressure / Undo**
+- ❌ **Difficulty progression** — move budget does not ramp from measured difficulty yet (the data to drive it now exists)
+- ❌ **Mobile touch controls**
+- ❌ **Accessibility** — limited ARIA / screen-reader support
 
 ## Known Limitations
 
-1. **Level Picker**: Only shows levels already reached; first level is auto-selected on load
-2. **Move Budget Calculation**: Simple heuristic (scramble length × 1.5 + cube count); could be refined with difficulty analysis
-3. **Random Scrambling**: Uses naive random reverse-rolls; no guarantee of variety or puzzle difficulty distribution
-4. **View Rotation**: Continuous (Q/E hold), not snapped; can be disorienting
-5. **Cube Selection**: Cursor can only move between physically adjacent cubes; no "selection highlight" if a cube is isolated
-6. **No Networked Leaderboard**: Scores are local-only
-7. **Three.js Dependency on CDN**: Game won't load if unpkg.com is unavailable or slow
+1. **Move Budget Calculation**: Simple heuristic; the backend now collects the attempt/move data needed to refine it from measured difficulty
+2. **Random Scrambling**: Naive random reverse-rolls (now seeded/deterministic per level); no explicit difficulty targeting yet
+3. **View Rotation**: Continuous (Q/E hold), not snapped; can be disorienting
+4. **Cube Selection**: Cursor can only move between physically adjacent cubes
+5. **Account Recovery**: A lost token (cleared localStorage) means picking a new name — no password/recovery yet
+6. **Three.js Dependency on CDN**: Game won't load if unpkg.com is unavailable or slow
 
 ## Potential Future Enhancements
 
@@ -48,15 +47,15 @@ Project status, scope, and future considerations for kCubeGL.
 - [ ] **Level Thumbnails** — Preview board layout in level picker
 
 ### Medium-term
-- [ ] **Systematic Difficulty Ramp** — Assign difficulty tier to each level; adjust move budget accordingly
+- [ ] **Systematic Difficulty Ramp** — Use the now-collected attempt/move data to assign each level a measured difficulty tier and tune its move budget
 - [ ] **Accessibility** — ARIA labels, keyboard-only navigation, high-contrast mode
-- [ ] **Statistics Dashboard** — Total moves across all levels, completion rate, personal best history
+- [~] **Statistics Dashboard** — Per-level difficulty + per-player skill summaries exist on the landing page; a fuller history/trend view is still open
 - [ ] **Custom Boards** — Level editor or procedural generation beyond reverse-scrambling
 - [ ] **Multiplayer** — Local pass-and-play or real-time competitive modes
 
 ### Long-term
-- [ ] **Backend Leaderboard** — Persist scores to a database; global rankings
-- [ ] **Cloud Saves** — Sync progress across devices
+- [x] **Backend Leaderboard** — Scores persisted to SQLite; per-level global rankings ✅
+- [ ] **Cloud Saves** — Sync progress across devices (needs password/real auth first)
 - [ ] **Themes** — Custom cube colors, board styles, UI skins
 - [ ] **3D Model Import** — Replace procedural cubes with custom 3D assets
 - [ ] **Larger Boards** — 6×6, 7×7 or variable sizes
@@ -109,11 +108,12 @@ Project status, scope, and future considerations for kCubeGL.
 
 ## Deployment Notes
 
-- **No runtime dependencies** (Three.js is loaded from CDN)
-- **No build artifacts** (serve the repo root directly)
-- **Static hosting only** (no server-side logic needed)
-- **Works offline** once cached (PWA potential, not yet implemented)
-- **localStorage** requires user to opt-in (no explicit permission needed in modern browsers)
+- **No build artifacts** — serve the repo directly; Three.js loads from CDN.
+- **Two ways to host:**
+  - *Full* — `npm start` runs `server/server.mjs` (Node ≥ 22.5), serving the game + JSON API + SQLite. Accounts, leaderboards and difficulty stats require this.
+  - *Static-only* — `npm run static` (or any static host). The API client degrades to localStorage; no accounts/leaderboards. Good for an offline/CDN deploy.
+- **No native dependency** — the backend uses only Node built-ins (`node:http`, `node:sqlite`), so there's nothing to compile or `npm install` for the server.
+- **DB file** — `server/kcube.sqlite` is created on first run (gitignored). Override with `KCUBE_DB` (`:memory:` for ephemeral, e.g. tests).
 
 ## Contact & Contribution
 

@@ -10,21 +10,46 @@ of moves.
 
 ## Play locally
 
-The game uses ES modules, so it must be served over HTTP (opening the file
-directly via `file://` won't load the modules). Any static server works:
+```bash
+npm start            # full app + accounts + leaderboards, http://localhost:8080
+```
+
+`npm start` runs a small Node server (`server/server.mjs`) that serves the game
+**and** a JSON API backed by SQLite. It needs **Node ≥ 22.5** — the backend uses
+the built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html) module, so there
+is **no native dependency and no `npm install`** for the server itself. The
+database file (`server/kcube.sqlite`) is created on first run.
+
+Then open <http://localhost:8080>, pick a level, and play.
+
+### Without the backend
+
+The game still runs as plain static files — the API client degrades gracefully
+to `localStorage` (your best scores are kept, but there are no accounts or
+leaderboards):
 
 ```bash
-# option A — Node
-npm start            # serves on http://localhost:8080
-
-# option B — Python
+npm run static       # static-only server (the old behaviour)
+# or
 python3 -m http.server 8080
 ```
 
-Then open <http://localhost:8080> and press **Play**.
+Three.js is loaded from a CDN at runtime (in your browser), so no build step is
+required either way.
 
-Three.js is loaded from a CDN at runtime (in your browser), so no build step or
-`npm install` is required.
+## Levels, accounts & leaderboards
+
+- **`index.html` is a real level picker** — a grid of levels showing your best,
+  the world best, and how many players have solved each. Click a card to play
+  (`play.html?level=N`); each level has a shareable URL.
+- **Every level is the same puzzle for everyone.** Level generation is seeded
+  from the level number, so level 5 is an identical board on every device —
+  which makes the best score a genuine record.
+- **Sign in with a name** (no password) to land on the leaderboards. The server
+  records every *attempt* — won, lost or abandoned — with its move count and
+  duration. From those rows it derives per-puzzle **difficulty** (win rate, avg
+  attempts to first solve / to a personal best) and per-player **skill** (solve
+  rate, average moves over the best-known solution, average solve time).
 
 ## How to play
 
@@ -72,18 +97,29 @@ Three.js is loaded from a CDN at runtime (in your browser), so no build step or
 ## Project layout
 
 ```
-index.html       entry point + import map (Three.js) + HUD/overlay markup
-src/styles.css   HUD, help text and overlay styling
-src/main.js      game logic, level generation, rendering and roll animation
+index.html         landing page: level grid, sign-in, leaderboards
+play.html          the game page (import map for Three.js) + HUD/overlay
+src/index.mjs      landing-page logic (grid, account, per-level detail)
+src/main.js        game logic, level generation, rendering and roll animation
+src/api.mjs        offline-safe browser client for the backend API
+src/shared.mjs     dependency-free level math shared by game + server
+src/styles.css     HUD, landing page and overlay styling
+server/server.mjs  HTTP server: static files + JSON API (node:http)
+server/db.mjs      SQLite data layer + analytics queries (node:sqlite)
+test/api.mjs       backend API integration test (no browser)
+test/smoke.mjs     end-to-end smoke test (Playwright, headless browser)
 ```
 
-## Scope (v1)
+## Scope
 
-Implemented: 5×5 board, bevelled dice with randomised orientations, arrow-key
-cursor & rolling, animated tip-over, solvable level generation, contiguous-block
-win condition, herding-aware move budget, carried bonus, Q/E view rotation,
-show-solution playback, persisted best scores and level replay, win/lose flow.
-Deliberately left out for now: sound, timer and undo.
+Implemented: 5×5 board, bevelled dice, arrow-key cursor & rolling, animated
+tip-over, **deterministic** solvable level generation, contiguous-block win
+condition, herding-aware move budget, carried bonus, Q/E view rotation,
+show-solution playback, win/lose flow; a real **level-picker landing page**, an
+optional **SQLite backend** with **username accounts**, **leaderboards**, and
+per-attempt tracking feeding **puzzle-difficulty** and **player-skill** stats.
+Best scores persist locally too, so the game still works with no backend.
+Deliberately left out for now: passwords/sessions, sound, timer and undo.
 
 ## License
 
