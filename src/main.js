@@ -395,10 +395,11 @@ function connectedCells(n) {
 
 /* --- Level generation ------------------------------------------------------
  * Start from a solved board (all cubes identity-oriented => white up) placed in
- * a single contiguous block, then apply N random reverse-rolls. Because every
- * scramble step is a legal roll, reversing the sequence solves the board AND
- * returns the cubes to their contiguous start => guaranteed solvable. The
- * recorded reverse sequence powers "show solution".
+ * a single contiguous block, then apply N random reverse-rolls. Each scramble
+ * step is a legal roll that also keeps the board a single 4-connected block, so
+ * reversing the sequence solves the board AND every move stays reachable by a
+ * cursor that can only hop between adjacent cubes => guaranteed human-solvable.
+ * The recorded reverse sequence powers "show solution".
  * ------------------------------------------------------------------------- */
 
 function levelParams(level) {
@@ -408,17 +409,30 @@ function levelParams(level) {
 }
 
 function scrambleRoll(cube) {
-  // Pick a random direction whose target cell is on-board and empty, then roll.
+  // Pick a random direction whose target cell is on-board, empty, AND keeps the
+  // whole board a single 4-connected block. The connectivity guard is essential:
+  // the player's cursor can only hop between N/S/E/W-adjacent cubes, so if a
+  // scramble ever fragmented the board into disjoint clusters the reverse
+  // sequence (our "par" solution) would require the cursor to teleport between
+  // clusters — impossible for a human. Keeping the block contiguous at every
+  // step guarantees the recorded solution is actually playable.
   // Returns the direction key used (so the scramble can be replayed), or null.
   const keys = Object.keys(DIRS).sort(() => Math.random() - 0.5);
   for (const k of keys) {
     const d = DIRS[k];
     const nr = cube.row + d.dr, nc = cube.col + d.dc;
     if (!inBounds(nr, nc) || occupied(nr, nc)) continue;
+    if (!rollKeepsContiguous(cube, nr, nc)) continue;
     applyRollLogic(cube, d, nr, nc);
     return k;
   }
   return null;
+}
+
+// Would moving `cube` to (nr,nc) leave every cube in one 4-connected block?
+function rollKeepsContiguous(cube, nr, nc) {
+  const cells = game.cubes.map((c) => (c === cube ? [nr, nc] : [c.row, c.col]));
+  return cellsConnected(cells);
 }
 
 // Apply a roll to logical + mesh state instantly (no animation).
@@ -471,10 +485,10 @@ function buildLevel(level) {
     cube: c, row: c.row, col: c.col, quat: c.mesh.quaternion.clone(),
   }));
 
-  // Move budget. Par is well above the raw scramble count: the cursor can only
-  // hop between cubes that are N/S/E/W-adjacent, so cubes scattered into disjoint
-  // clusters must be herded back into one block — far more moves than merely
-  // undoing the scramble.
+  // Move budget. The scramble keeps the board a single connected block, so the
+  // reverse sequence is always cursor-reachable and solvable in `scramble` rolls
+  // (cursor hops between adjacent cubes are free). Par stays generously above
+  // that raw count to leave room for imperfect, exploratory play.
   game.moves = scramble + game.cubes.length * 3 + 4 + game.bonus;
   game.movesUsed = 0;
   game.selected = 0;
