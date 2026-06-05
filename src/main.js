@@ -316,6 +316,7 @@ const game = {
   cubes: [],
   selected: null, // index into cubes
   moves: 0, // remaining move budget
+  startMoves: 0, // budget the level started with (restored on Retry)
   movesUsed: 0, // rolls spent this level (the score)
   targetColor: SOLVED_COLOR,
   state: "menu", // menu | playing | solving | won | lost
@@ -476,6 +477,7 @@ function buildLevel(level) {
   // clusters must be herded back into one block — far more moves than merely
   // undoing the scramble.
   game.moves = scramble + game.cubes.length * 3 + 4 + game.bonus;
+  game.startMoves = game.moves; // remember the budget so Retry can restore it
   game.movesUsed = 0;
   game.selected = 0;
   game.solving = false;
@@ -634,7 +636,7 @@ function solutionStep() {
     game.state = "lost"; // not a legitimate clear — offer a retry
     showOverlay(
       "Solution",
-      "That's one way: every cube the same colour in one connected block. Press <b>Retry</b> for a fresh scramble.",
+      "That's one way: every cube the same colour in one connected block. Press <b>Retry</b> to attempt this same puzzle yourself.",
       "Retry"
     );
     return;
@@ -720,8 +722,22 @@ function nextLevel() {
 }
 
 function retryLevel() {
+  // Replay the very same puzzle: rewind cubes to their snapshotted scrambled
+  // start (same positions + orientations), restore the cursor and move budget,
+  // rather than generating a fresh scramble.
   hideOverlay();
-  buildLevel(game.level); // fresh scramble of the same level index
+  if (game.initial.length === 0) { buildLevel(game.level); }
+  else {
+    restoreInitial();
+    game.moves = game.startMoves;
+    game.movesUsed = 0;
+    game.selected = 0; // same initial cursor placement
+    game.solving = false;
+    game.solveQueue = [];
+    tintBoard(game.targetColor);
+    updateCursor(true);
+    updateHud();
+  }
   game.state = "playing";
 }
 
