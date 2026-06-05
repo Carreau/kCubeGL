@@ -81,7 +81,11 @@ try {
     await page.waitForTimeout(150);
   }
   await page.keyboard.press("KeyS"); // show solution
-  await page.waitForTimeout(3000);
+  // Playback is intentionally slowed (debug instrumentation), so wait for the
+  // end-of-solution overlay to appear rather than relying on a fixed delay.
+  await page
+    .waitForFunction(() => !document.getElementById("overlay").classList.contains("hidden"), { timeout: 30000 })
+    .catch(() => {});
 
   const overlayVisible = await page.$eval("#overlay", (e) => !e.classList.contains("hidden"));
   if (!overlayVisible) fail("expected the solution overlay to be shown after playback");
