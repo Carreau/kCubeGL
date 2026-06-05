@@ -2,3 +2,9 @@ node_modules/
 .DS_Store
 *.log
 dist/
+
+# SQLite database files created by the backend (server/server.mjs)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>kCube — play</title>
+  <link rel="stylesheet" href="src/styles.css" />
+  <!-- Three.js loaded as an ES module from a CDN (runs in the player's browser) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <canvas id="scene"></canvas>
+
+    <!-- Top-left: back to the level picker + who's playing -->
+    <div id="topbar">
+      <a class="link-btn" href="index.html">← Levels</a>
+      <span class="who">playing as <b id="user">guest</b></span>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud">
+      <div class="hud-row">
+        <span class="badge">Level <b id="level">1</b></span>
+        <span class="badge">Moves <b id="moves">0</b></span>
+        <span class="badge">Cubes <b id="cubes">0</b></span>
+        <span class="badge">Best <b id="best">–</b></span>
+        <span class="badge">World <b id="world">–</b></span>
+      </div>
+      <div class="hud-row tools">
+        <button id="solveBtn" type="button">Show solution</button>
+        <button id="menuBtn" type="button">Levels</button>
+      </div>
+    </div>
+
+    <!-- Instructions -->
+    <div id="help">
+      <b>Arrow keys</b> roll the selected cube into an empty cell, or re-select an
+      adjacent cube. Make every cube show the <span id="help-target">same</span>
+      colour on top <b>and</b> form one connected block (touching N/S/E/W) before
+      you run out of moves.
+      <div class="keys">↑ ↓ ← → &nbsp;·&nbsp; <b>Q/E</b> rotate view &nbsp;·&nbsp; <b>R</b> retry &nbsp;·&nbsp; <b>S</b> solution &nbsp;·&nbsp; <b>M</b> levels &nbsp;·&nbsp; <b>Enter</b> next</div>
+    </div>
+
+    <!-- Center overlay for win / fail messages -->
+    <div id="overlay" class="hidden">
+      <div class="panel">
+        <h1 id="overlay-title">kCube</h1>
+        <p id="overlay-body"></p>
+        <button id="overlay-btn">Play</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

@@ -5,10 +5,13 @@
   "description": "kCube — a 3D dice-rolling puzzle playable in the browser (WebGL via Three.js).",
   "type": "module",
   "scripts": {
-    "start": "npx --yes serve -l 8080 .",
+    "start": "node --disable-warning=ExperimentalWarning server/server.mjs",
+    "static": "npx --yes serve -l 8080 .",
     "dev": "python3 -m http.server 8080",
-    "check": "node --check src/main.js",
-    "test": "node test/smoke.mjs"
+    "check": "node --check src/main.js && node --check src/shared.mjs && node --check src/api.mjs && node --check src/index.mjs && node --check server/db.mjs && node --check server/server.mjs",
+    "test": "npm run test:api && npm run test:smoke",
+    "test:api": "node --disable-warning=ExperimentalWarning test/api.mjs",
+    "test:smoke": "node test/smoke.mjs"
   },
   "keywords": ["webgl", "three.js", "puzzle", "game"],
   "license": "MIT",

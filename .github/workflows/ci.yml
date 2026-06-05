@@ -13,7 +13,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node ≥ 22.5 — the backend uses the built-in node:sqlite module.
+          node-version: 22
 
       - name: Syntax check
         run: npm run check
@@ -24,5 +25,5 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
-      - name: Headless smoke test
+      - name: Tests (API + headless smoke)
         run: npm test

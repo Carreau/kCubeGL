@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { levelRng, levelParams, baseBudget, shuffle } from "./shared.mjs";
+import * as api from "./api.mjs";
 
 /* ============================================================================
  * kCube — a 3D dice-rolling puzzle.
@@ -89,7 +91,12 @@ const NEI = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
 /* --- Helpers ---------------------------------------------------------------- */
 
-const randInt = (n) => Math.floor(Math.random() * n);
+// Level generation draws ALL its randomness from `rng`, a per-level seeded PRNG
+// (set at the top of buildLevel) so level N is the SAME puzzle for every
+// player — a prerequisite for comparable best-scores and per-puzzle difficulty
+// stats. Outside generation it falls back to Math.random.
+let rng = Math.random;
+const rint = (n) => Math.floor(rng() * n);
 const cellX = (col) => (col - (BOARD - 1) / 2) * S;
 const cellZ = (row) => (row - (BOARD - 1) / 2) * S;
 const inBounds = (r, c) => r >= 0 && r < BOARD && c >= 0 && c < BOARD;
@@ -327,6 +334,8 @@ const game = {
   moves: 0, // remaining move budget
   startMoves: 0, // budget the level started with (restored on Retry)
   movesUsed: 0, // rolls spent this level (the score)
+  par: 0, // bonus-free move budget (reported to the backend as level par)
+  optimal: 0, // shortest known solve for this exact board (solution length)
   targetColor: SOLVED_COLOR,
   state: "menu", // menu | playing | solving | won | lost
   anim: null, // active roll animation
@@ -335,6 +344,10 @@ const game = {
   solving: false, // true while auto-playing the solution
   solveQueue: [],
   walk: null, // active cursor-walk animation between solution moves
+  // Backend attempt tracking (offline-safe — null/0 when no server is present).
+  attemptId: null, // id of the in-progress attempt on the server
+  attemptStart: 0, // performance.now() when the attempt began (for duration)
+  username: null, // logged-in player name, if any (shown in the HUD)
 };
 
 const el = {
@@ -342,6 +355,8 @@ const el = {
   moves: document.getElementById("moves"),
   cubes: document.getElementById("cubes"),
   best: document.getElementById("best"),
+  world: document.getElementById("world"), // world-best badge (backend only)
+  user: document.getElementById("user"), // "playing as" label (backend only)
   overlay: document.getElementById("overlay"),
   title: document.getElementById("overlay-title"),
   body: document.getElementById("overlay-body"),
@@ -394,7 +409,7 @@ function connectedCells(n) {
   };
   pushNei(mid, mid);
   while (chosen.length < n && frontier.length) {
-    const [r, c] = frontier.splice(randInt(frontier.length), 1)[0];
+    const [r, c] = frontier.splice(rint(frontier.length), 1)[0];
     const k = r * BOARD + c;
     if (inSet.has(k)) continue;
     inSet.add(k);
@@ -414,11 +429,8 @@ function connectedCells(n) {
  * human-solvable. The recorded reverse sequence powers "show solution".
  * ------------------------------------------------------------------------- */
 
-function levelParams(level) {
-  const numCubes = Math.min(25, 2 + level);
-  const scramble = 3 + Math.floor(level * 1.6);
-  return { numCubes, scramble };
-}
+// levelParams() now lives in src/shared.mjs so the server can compute the same
+// metadata (cube count, scramble depth, par) without loading the game engine.
 
 function scrambleRoll(cube, forbidKey = null) {
   // Pick a random direction whose target cell is on-board and empty, then roll.
@@ -428,7 +440,7 @@ function scrambleRoll(cube, forbidKey = null) {
   // wastes a scramble step and shows up as a pointless there-and-back wobble in
   // the solution playback. Returns the direction key used (so the scramble can be
   // replayed), or null if the cube is boxed in.
-  const keys = Object.keys(DIRS).sort(() => Math.random() - 0.5);
+  const keys = shuffle(Object.keys(DIRS), rng);
   for (const k of keys) {
     if (k === forbidKey) continue;
     const d = DIRS[k];
@@ -488,6 +500,10 @@ function applyRollLogic(cube, dir, nr, nc) {
 }
 
 function buildLevel(level) {
+  // Seed every random choice below from the level number so this level is the
+  // exact same puzzle on every device — the basis for fair leaderboards.
+  rng = levelRng(level);
+
   // clear old cubes
   for (const c of game.cubes) c.dispose();
   game.cubes = [];
@@ -510,7 +526,7 @@ function buildLevel(level) {
   while (applied < scramble && guard < scramble * 40) {
     guard++;
     // Try cubes from the cursor's island, in random order, until one can roll.
-    const island = islandOf(cursorCube).sort(() => Math.random() - 0.5);
+    const island = shuffle(islandOf(cursorCube), rng);
     const prev = scrambleMoves[scrambleMoves.length - 1];
     let rolled = null;
     for (const cube of island) {
@@ -533,7 +549,7 @@ function buildLevel(level) {
   // from the current cursor's island so the extra move stays cursor-reachable.
   if (isSolved()) {
     const prev = scrambleMoves[scrambleMoves.length - 1];
-    for (const cube of islandOf(cursorCube).sort(() => Math.random() - 0.5)) {
+    for (const cube of shuffle(islandOf(cursorCube), rng)) {
       const forbid = prev && prev.cube === cube ? OPPOSITE[prev.key] : null;
       const k = scrambleRoll(cube, forbid);
       if (k) { scrambleMoves.push({ cube, key: k }); break; }
@@ -556,7 +572,12 @@ function buildLevel(level) {
   // reversed sequence is a route the cursor can actually walk and the board is
   // solvable in `scramble` rolls (cursor hops within an island are free). Par
   // stays generously above that raw count to leave room for exploratory play.
-  game.moves = scramble + game.cubes.length * 3 + 4 + game.bonus;
+  // `par` is the bonus-free budget (what the backend stores as the level's par);
+  // `optimal` is the shortest known solve for this exact board (its solution
+  // length) — both reported to the server to seed level metadata.
+  game.par = baseBudget(level);
+  game.optimal = game.solution.length;
+  game.moves = game.par + game.bonus;
   game.startMoves = game.moves; // remember the budget so Retry can restore it
   game.movesUsed = 0;
   // Start the cursor on the first cube of the solution (the last-scrambled cube)
@@ -694,6 +715,7 @@ function afterMove() {
   if (isSolved()) {
     game.state = "won";
     game.bonus += 1; // clearing a level grants +1 carried move
+    finalizeAttempt("won"); // close the attempt as a win (records moves + time)
     const { isRecord, best, prev } = recordScore(game.level, game.movesUsed);
     const scoreLine = isRecord
       ? (prev === undefined
@@ -708,6 +730,7 @@ function afterMove() {
     updateHud();
   } else if (game.moves <= 0) {
     game.state = "lost";
+    finalizeAttempt("lost"); // close the attempt as a loss (ran out of moves)
     showOverlay(
       "Out of moves",
       "Not quite — every cube the same colour in one connected block. Press <b>S</b> to see a solution, or retry.",
@@ -858,49 +881,92 @@ function hideOverlay() {
   el.overlay.classList.add("hidden");
 }
 
-// The menu doubles as a level picker: ◀ ▶ choose a level (any you've reached,
-// plus the next new one) and Play/Replay it to beat your best score.
-function showMenu() {
-  game.state = "menu";
-  const max = maxLevel();
-  game.menuLevel = Math.min(Math.max(1, game.menuLevel), max + 1);
-  const lvl = game.menuLevel;
-  const b = bestFor(lvl);
-  el.title.textContent = "kCube";
-  el.body.innerHTML =
-    "Roll cubes so they all show the <b>same colour</b> on top <b>and</b> form one " +
-    "connected block.<br><br>" +
-    `<b>◀ ▶</b> choose level &nbsp;·&nbsp; Level <b>${lvl}</b>` +
-    (b === null
-      ? ` &nbsp;·&nbsp; <span style="opacity:.6">unplayed</span>`
-      : ` &nbsp;·&nbsp; best <b>${b}</b> moves`) +
-    (max ? `<br><span style="opacity:.6">reached level ${max}</span>` : "");
-  el.btn.textContent = lvl <= max ? "Replay" : "Play";
-  el.overlay.classList.remove("hidden");
+/* --- Backend attempt tracking ----------------------------------------------
+ * Every time a player starts a board we open an "attempt" on the server and
+ * close it with an outcome (won / lost / abandoned). These rows are what later
+ * powers skill and difficulty analysis. All calls are best-effort: with no
+ * backend they quietly no-op and the game runs on localStorage alone.
+ * ------------------------------------------------------------------------- */
+
+// Resolve the stored token to a username for the HUD ("playing as …").
+async function refreshIdentity() {
+  const who = await api.me();
+  game.username = who && who.username ? who.username : null;
+  if (el.user) el.user.textContent = game.username ? "@" + game.username : "guest";
+}
+
+// Open a new attempt for the current board and refresh the world-record badge.
+function beginAttempt() {
+  game.attemptStart = performance.now();
+  game.attemptId = null;
+  api.startAttempt({
+    level: game.level,
+    numCubes: game.cubes.length,
+    par: game.par,
+    optimal: game.optimal,
+  }).then((r) => { if (r && r.attemptId) game.attemptId = r.attemptId; });
+  api.getLevel(game.level).then((info) => {
+    if (info && el.world) el.world.textContent = info.worldBest == null ? "–" : info.worldBest;
+  });
+}
+
+// Close the open attempt with an outcome. No-op if none is open (e.g. already
+// finalised by a win, or offline). Uses the CURRENT movesUsed/elapsed time, so
+// call it before rebuilding the board on retry/abandon.
+function finalizeAttempt(outcome) {
+  if (!game.attemptId) return;
+  const id = game.attemptId;
+  game.attemptId = null;
+  const durationMs = Math.round(performance.now() - game.attemptStart);
+  api.finishAttempt(id, { outcome, movesUsed: game.movesUsed, durationMs }).then((r) => {
+    if (outcome === "won" && r && el.world) {
+      el.world.textContent = r.worldBest == null ? "–" : r.worldBest;
+    }
+  });
+}
+
+// Keep the address bar in step with the level being played, so a refresh or a
+// shared link lands on the same puzzle.
+function syncUrl(level) {
+  try {
+    const u = new URL(location.href);
+    u.searchParams.set("level", String(level));
+    history.replaceState(null, "", u);
+  } catch { /* ignore */ }
 }
 
 /* --- Flow control ----------------------------------------------------------- */
 
-function startGame() {
-  game.level = game.menuLevel || 1;
-  game.bonus = 0; // a chosen-level run starts from a clean bonus
+// Build and start a fresh board for `level`, opening a new tracked attempt and
+// abandoning any still-open one. The single entry point used by boot, the
+// landing page, "Next level" and a fresh Retry.
+function startLevel(level) {
+  finalizeAttempt("abandoned"); // close a prior open attempt (old movesUsed) first
+  game.level = level;
+  game.menuLevel = level;
   hideOverlay();
-  buildLevel(game.level);
+  buildLevel(level);
   game.state = "playing";
+  syncUrl(level);
+  beginAttempt();
 }
 
+// Enter a level chosen from the landing page / URL: a clean run (bonus reset).
+function enterLevel(level) {
+  game.bonus = 0;
+  startLevel(level);
+}
+
+// Advance after a win, carrying the +1 bonus the win just banked.
 function nextLevel() {
-  game.level += 1;
-  game.menuLevel = game.level;
-  hideOverlay();
-  buildLevel(game.level);
-  game.state = "playing";
+  startLevel(game.level + 1);
 }
 
 function retryLevel() {
   // Replay the very same puzzle: rewind cubes to their snapshotted scrambled
   // start (same positions + orientations), restore the cursor and move budget,
-  // rather than generating a fresh scramble.
+  // rather than generating a fresh scramble. Abandon any open attempt first.
+  finalizeAttempt("abandoned");
   hideOverlay();
   if (game.initial.length === 0) { buildLevel(game.level); }
   else {
@@ -920,17 +986,23 @@ function retryLevel() {
     updateHud();
   }
   game.state = "playing";
+  beginAttempt();
 }
 
 function overlayAction() {
-  if (game.state === "menu") startGame();
-  else if (game.state === "won") nextLevel();
-  else retryLevel(); // lost
+  if (game.state === "won") nextLevel();
+  else retryLevel(); // lost, or end-of-solution
+}
+
+// Return to the landing page (the level picker lives there now).
+function goToLevels() {
+  finalizeAttempt("abandoned");
+  location.href = "index.html";
 }
 
 el.btn.addEventListener("click", overlayAction);
 el.solveBtn.addEventListener("click", () => { showSolution(); el.solveBtn.blur(); });
-el.menuBtn.addEventListener("click", () => { if (!game.solving) showMenu(); el.menuBtn.blur(); });
+el.menuBtn.addEventListener("click", () => { if (!game.solving) goToLevels(); el.menuBtn.blur(); });
 
 window.addEventListener("keydown", (e) => {
   // Q/E orbit the view around the vertical axis, in any state.
@@ -939,16 +1011,7 @@ window.addEventListener("keydown", (e) => {
 
   if (DIRS[e.key]) {
     e.preventDefault();
-    if (game.state === "playing") {
-      tryMove(e.key);
-    } else if (game.state === "menu") {
-      // arrows pick the level to play/replay
-      const max = maxLevel() + 1;
-      if (e.key === "ArrowRight") game.menuLevel = Math.min(max, game.menuLevel + 1);
-      else if (e.key === "ArrowLeft") game.menuLevel = Math.max(1, game.menuLevel - 1);
-      else return;
-      showMenu();
-    }
+    if (game.state === "playing") tryMove(e.key);
     return;
   }
 
@@ -962,7 +1025,17 @@ window.addEventListener("keydown", (e) => {
   } else if (e.key === "s" || e.key === "S") {
     showSolution();
   } else if (e.key === "m" || e.key === "M") {
-    if (!game.solving) showMenu();
+    if (!game.solving) goToLevels();
+  }
+});
+
+// Abandon an open attempt if the player navigates away mid-solve.
+window.addEventListener("beforeunload", () => {
+  if (game.attemptId) {
+    api.abandonBeacon(game.attemptId, {
+      movesUsed: game.movesUsed,
+      durationMs: Math.round(performance.now() - game.attemptStart),
+    });
   }
 });
 
@@ -999,7 +1072,12 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-// Boot — open on the menu/level picker, defaulting to the next unplayed level.
-game.menuLevel = maxLevel() + 1;
-showMenu();
+// Boot — the landing page (index.html) is the level picker now; it links here
+// with ?level=N. Read that level (default 1), show who's playing, and drop the
+// player straight onto the board. The "Levels" button / M key returns to it.
+const bootParams = new URLSearchParams(location.search);
+let bootLevel = parseInt(bootParams.get("level"), 10);
+if (!Number.isFinite(bootLevel) || bootLevel < 1) bootLevel = 1;
+refreshIdentity();
+enterLevel(bootLevel);
 requestAnimationFrame(loop);

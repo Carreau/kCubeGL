@@ -2,56 +2,58 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>kCube</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>kCube — levels</title>
   <link rel="stylesheet" href="src/styles.css" />
-  <!-- Three.js loaded as an ES module from a CDN (runs in the player's browser) -->
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-    }
-  }
-  </script>
 </head>
-<body>
-  <div id="app">
-    <canvas id="scene"></canvas>
-
-    <!-- HUD -->
-    <div id="hud">
-      <div class="hud-row">
-        <span class="badge">Level <b id="level">1</b></span>
-        <span class="badge">Moves <b id="moves">0</b></span>
-        <span class="badge">Cubes <b id="cubes">0</b></span>
-        <span class="badge">Best <b id="best">–</b></span>
-      </div>
-      <div class="hud-row tools">
-        <button id="solveBtn" type="button">Show solution</button>
-        <button id="menuBtn" type="button">Levels</button>
-      </div>
+<body class="landing-page">
+  <header class="site-head">
+    <div class="brand">
+      <span class="logo">kCube</span>
+      <span class="tag">roll-to-match puzzle</span>
     </div>
+    <!-- Account widget — filled in by src/index.mjs (login / who-am-I / sign out) -->
+    <div id="account" class="account"></div>
+  </header>
 
-    <!-- Instructions -->
-    <div id="help">
-      <b>Arrow keys</b> roll the selected cube into an empty cell, or re-select an
-      adjacent cube. Make every cube show the <span id="help-target">same</span>
-      colour on top <b>and</b> form one connected block (touching N/S/E/W) before
-      you run out of moves.
-      <div class="keys">↑ ↓ ← → &nbsp;·&nbsp; <b>Q/E</b> rotate view &nbsp;·&nbsp; <b>R</b> retry &nbsp;·&nbsp; <b>S</b> solution &nbsp;·&nbsp; <b>Enter</b> next</div>
-    </div>
-
-    <!-- Center overlay for win / fail messages -->
-    <div id="overlay" class="hidden">
-      <div class="panel">
-        <h1 id="overlay-title">kCube</h1>
-        <p id="overlay-body"></p>
-        <button id="overlay-btn">Play</button>
+  <main class="landing">
+    <section class="hero">
+      <h1>Pick a level</h1>
+      <p class="muted">
+        Roll every cube to the <b>same colour</b> on top in one <b>connected block</b>,
+        under par. Each level is the <b>same puzzle for everyone</b> — so the best
+        score is a real record. Sign in with a name to land on the leaderboards.
+      </p>
+      <div id="offline" class="offline hidden">
+        Offline — your scores are saved in this browser only. Run the server
+        (<code>npm start</code>) for accounts, leaderboards &amp; difficulty stats.
       </div>
+    </section>
+
+    <!-- Your skill summary (when signed in to a backend) -->
+    <section id="mystats" class="mystats hidden"></section>
+
+    <section class="levels">
+      <div class="levels-head">
+        <h2>Levels</h2>
+        <label class="count muted">
+          Show
+          <input id="levelCount" type="number" min="6" max="60" step="6" value="12" />
+          levels
+        </label>
+      </div>
+      <div id="grid" class="grid" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <!-- Per-level detail: leaderboard + difficulty stats -->
+  <div id="detail" class="detail hidden" role="dialog" aria-modal="true">
+    <div class="detail-card">
+      <button id="detailClose" class="detail-close" type="button" aria-label="Close">×</button>
+      <div id="detailBody"></div>
     </div>
   </div>
 
-  <script type="module" src="src/main.js"></script>
+  <script type="module" src="src/index.mjs"></script>
 </body>
 </html>

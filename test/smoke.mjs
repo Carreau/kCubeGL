@@ -1,58 +1,19 @@
-/* Headless smoke test for kCube.
+/* Headless end-to-end smoke test for kCube.
  *
- * Serves the repository over HTTP, loads the game in a real (headless) browser,
- * starts a level, performs a few rolls, rotates the view and plays back the
- * solution — then fails if the page logged any error, threw, or a script/asset
- * (including the Three.js CDN module) failed to load. This is enough to catch
- * module/import regressions and WebGL/runtime breakage without a build step.
+ * Boots the real backend (server/server.mjs) against an in-memory DB, then in a
+ * headless browser: loads the landing page, signs in, picks a level, plays a
+ * few rolls, rotates the view and plays back the solution. It fails if the page
+ * logged any error, threw, or a script/asset (including the Three.js CDN module)
+ * failed to load — and it checks that starting a level recorded an attempt in
+ * the database, so the front-to-back wiring is covered too.
  */
-import http from "node:http";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { dirname, join, normalize } from "node:path";
 import pw from "playwright";
+import { startServer } from "../server/server.mjs";
 
 const { chromium } = pw;
-const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), ".."));
-
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".mjs": "application/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".svg": "image/svg+xml",
-};
-
-function startServer() {
-  const server = http.createServer(async (req, res) => {
-    try {
-      let path = decodeURIComponent(req.url.split("?")[0]);
-      if (path === "/" || path === "") path = "/index.html";
-      // contain requests to the repo root
-      const full = normalize(join(ROOT, path));
-      if (!full.startsWith(ROOT)) { res.statusCode = 403; return res.end("forbidden"); }
-      const ext = full.slice(full.lastIndexOf("."));
-      const body = await readFile(full);
-      res.setHeader("Content-Type", MIME[ext] || "application/octet-stream");
-      res.end(body);
-    } catch {
-      res.statusCode = 404;
-      res.end("not found");
-    }
-  });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      resolve({ server, url: `http://127.0.0.1:${port}/` });
-    });
-  });
-}
-
 const fail = (msg) => { console.error("✗ " + msg); process.exitCode = 1; };
 
-const { server, url } = await startServer();
+const { url, db, close } = await startServer({ dbPath: ":memory:", port: 0 });
 const browser = await chromium.launch({ args: ["--enable-unsafe-swiftshader"] });
 const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 900, height: 700 } });
 const page = await ctx.newPage();
@@ -63,12 +24,20 @@ page.on("console", (m) => { if (m.type() === "error") errors.push("console.error
 page.on("requestfailed", (r) => errors.push(`requestfailed: ${r.url()} ${r.failure()?.errorText || ""}`));
 
 try {
+  // --- Landing page: grid renders, and we can sign in. ---
   await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
-  await page.waitForTimeout(1500);
+  await page.waitForSelector(".card", { timeout: 15000 });
 
-  // Start the level from the menu.
-  await page.keyboard.press("Enter");
-  await page.waitForTimeout(800);
+  await page.fill("#nameInput", "tester");
+  await page.click("#loginForm button[type=submit]");
+  await page.waitForSelector(".who-pill", { timeout: 10000 });
+  const who = await page.$eval(".who-pill", (e) => e.textContent);
+  if (!/tester/.test(who)) fail(`expected to be signed in as tester, saw "${who}"`);
+
+  // --- Open level 1 and play. ---
+  await page.click('.card[data-level="1"]');
+  await page.waitForURL(/play\.html\?level=1/, { timeout: 10000 });
+  await page.waitForTimeout(1500); // game init + Three.js from CDN
 
   const cubes = Number(await page.$eval("#cubes", (e) => e.textContent));
   const moves = Number(await page.$eval("#moves", (e) => e.textContent));
@@ -90,15 +59,17 @@ try {
   const overlayVisible = await page.$eval("#overlay", (e) => !e.classList.contains("hidden"));
   if (!overlayVisible) fail("expected the solution overlay to be shown after playback");
 
-  if (errors.length) {
-    for (const e of errors) fail(e);
-  }
+  // --- Front-to-back: starting the level recorded an attempt in the DB. ---
+  const attempts = db.db.prepare("SELECT COUNT(*) AS n FROM attempts WHERE level = 1").get().n;
+  if (!(attempts >= 1)) fail(`expected an attempt to be recorded for level 1, got ${attempts}`);
+
+  if (errors.length) for (const e of errors) fail(e);
 } catch (e) {
   fail("threw: " + (e && e.stack ? e.stack : e));
 } finally {
   await browser.close();
-  server.close();
+  close();
 }
 
 if (process.exitCode) console.error("\nSmoke test FAILED.");
-else console.log("✓ Smoke test passed (no console/page/network errors).");
+else console.log("✓ Smoke test passed (landing → play → solution, attempt recorded, no errors).");
