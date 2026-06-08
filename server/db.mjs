@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS attempts (
   outcome     TEXT NOT NULL DEFAULT 'in_progress', -- in_progress|won|lost|abandoned
   moves_used  INTEGER,
   duration_ms INTEGER,
+  move_seq    TEXT,                                 -- player's cursor path (R/L/U/D)
   started_at  INTEGER NOT NULL,
   ended_at    INTEGER
 );
@@ -54,7 +55,22 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  migrate(db);
   return new Db(db);
+}
+
+// Lightweight, idempotent migrations for DBs created before a column existed.
+// CREATE TABLE IF NOT EXISTS won't add new columns to an existing table, so we
+// ALTER them in by hand when missing.
+function migrate(db) {
+  ensureColumn(db, "attempts", "move_seq", "TEXT");
+}
+
+function ensureColumn(db, table, column, def) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+  }
 }
 
 export class Db {
@@ -127,13 +143,13 @@ export class Db {
 
   // Finalise the caller's own in-progress attempt. Returns true if a row was
   // updated (false if it wasn't theirs / already closed).
-  finishAttempt(id, userId, { outcome, movesUsed, durationMs }) {
+  finishAttempt(id, userId, { outcome, movesUsed, durationMs, moveSeq }) {
     const r = this.db
       .prepare(
-        "UPDATE attempts SET outcome = ?, moves_used = ?, duration_ms = ?, ended_at = ? " +
+        "UPDATE attempts SET outcome = ?, moves_used = ?, duration_ms = ?, move_seq = ?, ended_at = ? " +
         "WHERE id = ? AND user_id = ? AND outcome = 'in_progress'"
       )
-      .run(outcome, movesUsed ?? null, durationMs ?? null, now(), id, userId);
+      .run(outcome, movesUsed ?? null, durationMs ?? null, moveSeq ?? null, now(), id, userId);
     return r.changes > 0;
   }
 

@@ -86,6 +86,12 @@ const OPPOSITE = {
   ArrowUp: "ArrowDown", ArrowDown: "ArrowUp",
 };
 
+// Compact one-char code per arrow, used to record the player's cursor moves as a
+// replayable string (R/L/U/D) for debugging and backend storage.
+const KEY_CODE = {
+  ArrowRight: "R", ArrowLeft: "L", ArrowUp: "U", ArrowDown: "D",
+};
+
 // 4-neighbourhood for connectivity / adjacency tests.
 const NEI = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
@@ -340,6 +346,7 @@ const game = {
   state: "menu", // menu | playing | solving | won | lost
   anim: null, // active roll animation
   solution: [], // recorded solving moves: [{cube, key}]
+  userMoves: [], // the player's own cursor moves this attempt, as R/L/U/D codes
   initial: [], // snapshot of the scrambled start, for replaying the solution
   solving: false, // true while auto-playing the solution
   solveQueue: [],
@@ -386,7 +393,12 @@ function cellsConnected(cells) {
   while (stack.length) {
     const [r, c] = stack.pop();
     for (const [dr, dc] of NEI) {
-      const nr = r + dr, nc = c + dc, k = nr * BOARD + nc;
+      const nr = r + dr, nc = c + dc;
+      // Bounds-check BEFORE encoding: r*BOARD+c with an off-board nc wraps onto a
+      // neighbouring row's cell (e.g. col -1 → previous row's col 4), which would
+      // falsely bridge two disjoint islands and accept a non-contiguous board.
+      if (!inBounds(nr, nc)) continue;
+      const k = nr * BOARD + nc;
       if (set.has(k) && !seen.has(k)) { seen.add(k); stack.push([nr, nc]); }
     }
   }
@@ -583,6 +595,7 @@ function buildLevel(level) {
   game.moves = game.par + game.bonus;
   game.startMoves = game.moves; // remember the budget so Retry can restore it
   game.movesUsed = 0;
+  game.userMoves = []; // fresh board ⇒ fresh recording of the player's cursor path
   // Start the cursor on the first cube of the solution (the last-scrambled cube)
   // so par is reachable from the opening position, not just by "show solution".
   game.selected = game.solution.length
@@ -637,12 +650,15 @@ function tryMove(key) {
 
   const other = cubeAt(nr, nc);
   if (other) {
-    // re-select neighbour — free, no move spent
+    // re-select neighbour — free, no move spent. Still a cursor move, so record it
+    // (the recorded R/L/U/D stream replays the player's full path, not just rolls).
+    game.userMoves.push(KEY_CODE[key]);
     selectCube(game.cubes.indexOf(other));
     return;
   }
 
   if (game.moves <= 0) return;
+  game.userMoves.push(KEY_CODE[key]); // a roll: the cursor rides the cube it tips
   startRoll(cube, dir, nr, nc, true);
 }
 
@@ -718,7 +734,13 @@ function afterMove() {
   if (isSolved()) {
     game.state = "won";
     game.bonus += 1; // clearing a level grants +1 carried move
-    finalizeAttempt("won"); // close the attempt as a win (records moves + time)
+    if (DEBUG_SOLVE) {
+      console.log(
+        `[solve] player cleared level ${game.level} in ${game.movesUsed} moves · ` +
+        `cursor path (${game.userMoves.length} keys): ${game.userMoves.join("") || "(none)"}`
+      );
+    }
+    finalizeAttempt("won"); // close the attempt as a win (records moves + time + path)
     const { isRecord, best, prev } = recordScore(game.level, game.movesUsed);
     const scoreLine = isRecord
       ? (prev === undefined
@@ -921,7 +943,8 @@ function finalizeAttempt(outcome) {
   const id = game.attemptId;
   game.attemptId = null;
   const durationMs = Math.round(performance.now() - game.attemptStart);
-  api.finishAttempt(id, { outcome, movesUsed: game.movesUsed, durationMs }).then((r) => {
+  const moveSeq = game.userMoves.join(""); // the player's full cursor path, R/L/U/D
+  api.finishAttempt(id, { outcome, movesUsed: game.movesUsed, durationMs, moveSeq }).then((r) => {
     if (outcome === "won" && r && el.world) {
       el.world.textContent = r.worldBest == null ? "–" : r.worldBest;
     }
@@ -976,6 +999,7 @@ function retryLevel() {
     restoreInitial();
     game.moves = game.startMoves;
     game.movesUsed = 0;
+    game.userMoves = []; // replaying the same board ⇒ start recording afresh
     // Same opening cursor as a fresh build — on the first solution cube, so par
     // is reachable from the start (cubes[0] often sits in a different island).
     game.selected = game.solution.length

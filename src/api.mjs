@@ -106,11 +106,12 @@ export function startAttempt({ level, numCubes, par, optimal }) {
   return tryReq("POST", "/attempts", { level, numCubes, par, optimal });
 }
 
-// Finalise an attempt with its outcome and score. Returns { best, isRecord,
-// worldBest } or null offline.
-export function finishAttempt(id, { outcome, movesUsed, durationMs }) {
+// Finalise an attempt with its outcome and score. `moveSeq` is the player's
+// recorded cursor path (R/L/U/D string), stored for replay/analysis. Returns
+// { best, isRecord, worldBest } or null offline.
+export function finishAttempt(id, { outcome, movesUsed, durationMs, moveSeq }) {
   if (!id) return Promise.resolve(null);
-  return tryReq("PATCH", `/attempts/${id}`, { outcome, movesUsed, durationMs });
+  return tryReq("PATCH", `/attempts/${id}`, { outcome, movesUsed, durationMs, moveSeq });
 }
 
 // Mark an in-progress attempt abandoned on page unload. Uses sendBeacon, which

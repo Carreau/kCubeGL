@@ -13,7 +13,7 @@ function ok(cond, msg) {
 }
 function eq(a, b, msg) { ok(a === b, `${msg} (got ${JSON.stringify(a)}, want ${JSON.stringify(b)})`); }
 
-const { url, close } = await startServer({ dbPath: ":memory:", port: 0 });
+const { url, db, close } = await startServer({ dbPath: ":memory:", port: 0 });
 const api = url.replace(/\/$/, "") + "/api";
 
 // fetch helper: returns { status, body }
@@ -98,6 +98,21 @@ try {
   eq(grid2[0].yourBest, 5, "authed grid shows yourBest 5");
   eq(grid2[0].worldBest, 5, "authed grid shows worldBest 5");
   eq(grid2[0].solvers, 2, "level 1 has 2 solvers");
+
+  // move-sequence recording: the player's cursor path round-trips into the row,
+  // and any non-R/L/U/D characters are stripped server-side before storage.
+  const moveSeqOf = (id) => db.db.prepare("SELECT move_seq FROM attempts WHERE id = ?").get(id).move_seq;
+  const mv = await call("POST", "/attempts", { token: tokenA, body: { level: 3, numCubes: 3, par: 13, optimal: 5 } });
+  await call("PATCH", `/attempts/${mv.body.attemptId}`, {
+    token: tokenA, body: { outcome: "won", movesUsed: 6, durationMs: 3000, moveSeq: "RR<bad>UULD" },
+  });
+  eq(moveSeqOf(mv.body.attemptId), "RRUULD", "move sequence stored, junk chars stripped");
+  // A sequence of only junk characters collapses to null rather than "".
+  const junk = await call("POST", "/attempts", { token: tokenA, body: { level: 4, numCubes: 3, par: 13, optimal: 5 } });
+  await call("PATCH", `/attempts/${junk.body.attemptId}`, {
+    token: tokenA, body: { outcome: "won", movesUsed: 6, durationMs: 3000, moveSeq: "!!!" },
+  });
+  eq(moveSeqOf(junk.body.attemptId), null, "junk-only move sequence stored as null");
 
   // abandon via beacon endpoint (token in body)
   const st = await call("POST", "/attempts", { token: tokenA, body: { level: 2, numCubes: 4, par: 16, optimal: 6 } });
