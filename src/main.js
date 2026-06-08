@@ -265,7 +265,8 @@ const fill = new THREE.DirectionalLight(0x88aaff, 0.35);
 fill.position.set(-5, 4, -4);
 scene.add(fill);
 
-// Board group (tiles + base). Tinted toward the target colour as a hint.
+// Board group (tiles + base). Kept a neutral dark colour so it never hints at
+// the target colour the player has to find.
 const boardGroup = new THREE.Group();
 scene.add(boardGroup);
 
@@ -624,7 +625,6 @@ function buildLevel(level) {
   game.solveQueue = [];
   game.walk = null;
 
-  tintBoard(game.targetColor);
   updateCursor(true);
   updateHud();
 }
@@ -640,16 +640,6 @@ function isUniform() {
 // Solved = same colour up on every cube AND a single connected block.
 function isSolved() {
   return isUniform() && isContiguous();
-}
-
-function tintBoard(colorId) {
-  const c = new THREE.Color(COLORS[colorId].hex);
-  for (const m of tileMats) {
-    m.emissive = c;
-    m.emissiveIntensity = 0.12;
-  }
-  baseMat.emissive = c;
-  baseMat.emissiveIntensity = 0.05;
 }
 
 /* --- Input / rolling -------------------------------------------------------- */
@@ -1027,7 +1017,6 @@ function retryLevel() {
     game.solving = false;
     game.solveQueue = [];
     game.walk = null;
-    tintBoard(game.targetColor);
     updateCursor(true);
     updateHud();
   }
