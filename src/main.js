@@ -52,8 +52,6 @@ const FACE_AXES = [
   { v: new THREE.Vector3(0, 0, 1), color: 4 }, // +Z blue
   { v: new THREE.Vector3(0, 0, -1), color: 5 }, // -Z green
 ];
-const SOLVED_COLOR = 0; // white ends up on top of a freshly-solved board
-
 // Arrow-key directions. dr/dc are board deltas; the pivot + rotation describe
 // the physical tip-over used both for the animation and the resulting
 // orientation. edgeOffset is added to the cube CENTRE to find the contact edge.
@@ -154,6 +152,14 @@ function topColor(quat) {
     if (_tmp.y > best) { best = _tmp.y; color = f.color; }
   }
   return color;
+}
+
+// Return a quaternion that rotates a cube so the face with `colorId` points up (+Y).
+function faceUpQuat(colorId) {
+  const face = FACE_AXES.find((f) => f.color === colorId);
+  const q = new THREE.Quaternion();
+  q.setFromUnitVectors(face.v, new THREE.Vector3(0, 1, 0));
+  return q;
 }
 
 /* A lightly bevelled cube. RoundedBoxGeometry is single-material, so we rebuild
@@ -342,7 +348,7 @@ const game = {
   movesUsed: 0, // rolls spent this level (the score)
   par: 0, // bonus-free move budget (reported to the backend as level par)
   optimal: 0, // shortest known solve for this exact board (solution length)
-  targetColor: SOLVED_COLOR,
+  targetColor: 0,
   state: "menu", // menu | playing | solving | won | lost
   anim: null, // active roll animation
   solution: [], // recorded solving moves: [{cube, key}]
@@ -519,6 +525,12 @@ function buildLevel(level) {
   // exact same puzzle on every device — the basis for fair leaderboards.
   rng = levelRng(level);
 
+  // Pick which face color is "solved" for this level, and set the initial cube
+  // orientation before scrambling. Drawn from the level's seeded RNG so the
+  // choice is stable for every player on level N.
+  const targetColorId = rint(COLORS.length);
+  game.targetColor = targetColorId;
+
   // clear old cubes
   for (const c of game.cubes) c.dispose();
   game.cubes = [];
@@ -527,6 +539,15 @@ function buildLevel(level) {
 
   // place cubes as a single contiguous block, solved orientation
   for (const [r, c] of connectedCells(numCubes)) game.cubes.push(new Cube(r, c));
+
+  // Orient each cube so targetColorId faces up, plus a per-cube random Y-axis spin
+  // (0°/90°/180°/270°) so side faces vary even when the top color is fixed.
+  const baseQ = faceUpQuat(targetColorId);
+  const _yAxis = new THREE.Vector3(0, 1, 0);
+  for (const cube of game.cubes) {
+    const yQ = new THREE.Quaternion().setFromAxisAngle(_yAxis, rint(4) * (Math.PI / 2));
+    cube.mesh.quaternion.copy(baseQ).premultiply(yQ);
+  }
 
   // Scramble with random reverse-rolls, recording each so the exact reverse can
   // be replayed as the solution. The cursor can only hop between cubes sharing an
@@ -557,8 +578,6 @@ function buildLevel(level) {
     cursorCube = rolled.cube; // cursor rides along with the cube it just rolled
     applied++;
   }
-
-  game.targetColor = SOLVED_COLOR;
 
   // If by luck the scramble produced an already-solved board, nudge once more
   // from the current cursor's island so the extra move stays cursor-reachable.
