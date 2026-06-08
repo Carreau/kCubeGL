@@ -1,0 +1,38 @@
+# Optional Compose file for Coolify ("Docker Compose" build pack) or local use.
+#
+# Coolify can also deploy straight from the Dockerfile (the "Dockerfile" build
+# pack) — in that case you don't need this file; just set a persistent volume
+# mounted at /data and the env vars below in the Coolify UI.
+#
+#   docker compose up --build      # run locally on http://localhost:8080
+services:
+  kcube:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Coolify manages the public port/domain + TLS via its proxy; this mapping
+    # is mainly for running the stack locally with plain `docker compose`.
+    ports:
+      - "8080:8080"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "8080"
+      KCUBE_DB: /data/kcube.sqlite
+    volumes:
+      # Persist the SQLite DB (accounts, attempts, leaderboards) across redeploys.
+      - kcube-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  kcube-data:

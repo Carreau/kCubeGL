@@ -1,0 +1,20 @@
+# Keep the image small and free of host-only / dev-only files.
+.git
+.github
+node_modules
+test
+*.md
+plan.md
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Never bake a local database or its journals into the image.
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+.DS_Store
+*.log
+dist/
