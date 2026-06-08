@@ -194,8 +194,13 @@ async function handleApi(req, res, url, db) {
     const level = row.level;
     const movesUsed = Math.max(0, toInt(body.movesUsed) ?? 0);
     const durationMs = Math.max(0, toInt(body.durationMs) ?? 0);
+    // Player's recorded cursor path (R/L/U/D). Keep only the four codes and cap
+    // the length so a stray/oversized payload can't bloat the row.
+    const moveSeq = typeof body.moveSeq === "string"
+      ? body.moveSeq.replace(/[^RLUD]/g, "").slice(0, 4096) || null
+      : null;
     const prevBest = db.userBest(u.id, level); // before recording this outcome
-    db.finishAttempt(id, u.id, { outcome: body.outcome, movesUsed, durationMs });
+    db.finishAttempt(id, u.id, { outcome: body.outcome, movesUsed, durationMs, moveSeq });
     return sendJson(res, 200, {
       best: db.userBest(u.id, level),
       worldBest: db.worldBest(level),
