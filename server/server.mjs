@@ -175,7 +175,8 @@ async function handleApi(req, res, url, db) {
       par: toInt(body.par) ?? undefined,
       optimal: toInt(body.optimal) ?? undefined,
     });
-    return sendJson(res, 201, { attemptId: db.startAttempt(u.id, level) });
+    const { puzzleId } = db.levelMeta(level);
+    return sendJson(res, 201, { attemptId: db.startAttempt(u.id, level, puzzleId) });
   }
 
   // PATCH /api/attempts/:id  { outcome, movesUsed, durationMs }
