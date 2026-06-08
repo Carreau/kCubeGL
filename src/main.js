@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { levelRng, levelParams, baseBudget, shuffle } from "./shared.mjs";
+import { mulberry32, hashLevelSeed, levelParams, baseBudget, shuffle } from "./shared.mjs";
 import * as api from "./api.mjs";
 
 /* ============================================================================
@@ -358,6 +358,9 @@ const game = {
   solving: false, // true while auto-playing the solution
   solveQueue: [],
   walk: null, // active cursor-walk animation between solution moves
+  // Puzzle config fetched from the server (or computed offline). Stored so that
+  // retryLevel can rebuild without re-fetching if game.initial is somehow empty.
+  puzzleConfig: null,
   // Backend attempt tracking (offline-safe — null/0 when no server is present).
   attemptId: null, // id of the in-progress attempt on the server
   attemptStart: 0, // performance.now() when the attempt began (for duration)
@@ -521,10 +524,11 @@ function applyRollLogic(cube, dir, nr, nc) {
   cube.syncMesh();
 }
 
-function buildLevel(level) {
-  // Seed every random choice below from the level number so this level is the
-  // exact same puzzle on every device — the basis for fair leaderboards.
-  rng = levelRng(level);
+function buildLevel(level, config) {
+  // Seed all randomness from the puzzle's seed so this exact board is reproduced
+  // identically on every device — the basis for fair leaderboards. The config
+  // comes from the server (enabling reordering) with a local fallback for offline.
+  rng = mulberry32(config.seed);
 
   // Pick which face color is "solved" for this level, and set the initial cube
   // orientation before scrambling. Drawn from the level's seeded RNG so the
@@ -536,7 +540,7 @@ function buildLevel(level) {
   for (const c of game.cubes) c.dispose();
   game.cubes = [];
 
-  const { numCubes, scramble } = levelParams(level);
+  const { numCubes, scramble } = config;
 
   // place cubes as a single contiguous block, solved orientation
   for (const [r, c] of connectedCells(numCubes)) game.cubes.push(new Cube(r, c));
@@ -610,7 +614,7 @@ function buildLevel(level) {
   // `par` is the bonus-free budget (what the backend stores as the level's par);
   // `optimal` is the shortest known solve for this exact board (its solution
   // length) — both reported to the server to seed level metadata.
-  game.par = baseBudget(level);
+  game.par = config.par;
   game.optimal = game.solution.length;
   game.moves = game.par + game.bonus;
   game.startMoves = game.moves; // remember the budget so Retry can restore it
@@ -930,7 +934,10 @@ async function refreshIdentity() {
 }
 
 // Open a new attempt for the current board and refresh the world-record badge.
-function beginAttempt() {
+// `levelInfo` is the already-fetched GET /api/levels/:level response from
+// startLevel; passing it avoids a duplicate request. When null (e.g. retryLevel),
+// a fresh fetch is made instead.
+function beginAttempt(levelInfo = null) {
   game.attemptStart = performance.now();
   game.attemptId = null;
   api.startAttempt({
@@ -939,9 +946,14 @@ function beginAttempt() {
     par: game.par,
     optimal: game.optimal,
   }).then((r) => { if (r && r.attemptId) game.attemptId = r.attemptId; });
-  api.getLevel(game.level).then((info) => {
-    if (info && el.world) el.world.textContent = info.worldBest == null ? "–" : info.worldBest;
-  });
+
+  if (levelInfo) {
+    if (el.world) el.world.textContent = levelInfo.worldBest == null ? "–" : levelInfo.worldBest;
+  } else {
+    api.getLevel(game.level).then((info) => {
+      if (info && el.world) el.world.textContent = info.worldBest == null ? "–" : info.worldBest;
+    });
+  }
 }
 
 // Close the open attempt with an outcome. No-op if none is open (e.g. already
@@ -975,15 +987,25 @@ function syncUrl(level) {
 // Build and start a fresh board for `level`, opening a new tracked attempt and
 // abandoning any still-open one. The single entry point used by boot, the
 // landing page, "Next level" and a fresh Retry.
-function startLevel(level) {
+async function startLevel(level) {
   finalizeAttempt("abandoned"); // close a prior open attempt (old movesUsed) first
   game.level = level;
   game.menuLevel = level;
   hideOverlay();
-  buildLevel(level);
+
+  // One request serves two purposes: derive the puzzle config (seed + params)
+  // and pre-load world-best so beginAttempt can show it without a second fetch.
+  // Falls back to local deterministic params when the backend is unreachable.
+  const levelInfo = await api.getLevel(level);
+  const config = (levelInfo && levelInfo.seed != null)
+    ? { seed: levelInfo.seed, numCubes: levelInfo.numCubes, scramble: levelInfo.scramble, par: levelInfo.par }
+    : { seed: hashLevelSeed(level), ...levelParams(level), par: baseBudget(level) };
+
+  game.puzzleConfig = config;
+  buildLevel(level, config);
   game.state = "playing";
   syncUrl(level);
-  beginAttempt();
+  beginAttempt(levelInfo);
 }
 
 // Enter a level chosen from the landing page / URL: a clean run (bonus reset).
@@ -1003,7 +1025,7 @@ function retryLevel() {
   // rather than generating a fresh scramble. Abandon any open attempt first.
   finalizeAttempt("abandoned");
   hideOverlay();
-  if (game.initial.length === 0) { buildLevel(game.level); }
+  if (game.initial.length === 0) { buildLevel(game.level, game.puzzleConfig); }
   else {
     restoreInitial();
     game.moves = game.startMoves;
