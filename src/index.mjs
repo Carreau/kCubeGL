@@ -56,30 +56,13 @@ function renderAccount() {
   if (state.user) {
     box.innerHTML =
       `<span class="who-pill">@${esc(state.user.username)}</span>` +
+      (state.user.isAdmin ? `<a href="admin.html" class="link-btn">Admin</a>` : '') +
       `<button id="signout" class="link-btn" type="button">Sign out</button>`;
     $("signout").addEventListener("click", () => { api.clearToken(); boot(); });
     return;
   }
   box.innerHTML =
-    `<form id="loginForm" class="login">` +
-    `<input id="nameInput" placeholder="pick a name" maxlength="24" autocomplete="off" />` +
-    `<button class="primary" type="submit">Play as this name</button>` +
-    `<span id="loginErr" class="login-err"></span></form>`;
-  $("loginForm").addEventListener("submit", onLogin);
-}
-
-async function onLogin(e) {
-  e.preventDefault();
-  const name = $("nameInput").value.trim();
-  const err = $("loginErr");
-  err.textContent = "";
-  if (!name) { err.textContent = "enter a name"; return; }
-  try {
-    await api.createUser(name);
-    boot();
-  } catch (ex) {
-    err.textContent = ex && ex.status === 409 ? "name taken" : "couldn't sign in";
-  }
+    `<a href="login.html" class="primary" style="text-decoration:none;font-size:13px;padding:8px 18px">Sign In</a>`;
 }
 
 /* --- your skill summary ----------------------------------------------------- */
