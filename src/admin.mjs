@@ -125,8 +125,9 @@ function puzzleRow(p, opts = {}) {
   const solved = p.solvedAt != null;
   const solverMeta = solved
     ? `<span class="solver-meta" title="full solver (BFS-optimal) roll count">opt ${dash(p.fullOptimal)}</span>` +
-      ` · <span class="solver-meta" title="beam-search approximate roll count">beam ${dash(p.beamMoves)}</span>`
-    : `<span class="solver-meta unsolved" title="solver not run yet">opt ? · beam ?</span>`;
+      ` · <span class="solver-meta" title="beam-search approximate roll count">beam ${dash(p.beamMoves)}</span>` +
+      ` · <span class="solver-meta effort" title="search-effort difficulty guide: minimum beam width to solve (1 ≈ no planning needed, higher = harder)">effort w${dash(p.minBeamWidth)}</span>`
+    : `<span class="solver-meta unsolved" title="solver not run yet">opt ? · beam ? · effort ?</span>`;
   const meta =
     `${p.numCubes} cubes · scramble ${p.scramble} · ${pct(p.failRate)} fail` +
     (p.worldBest != null ? ` · world ${p.worldBest}` : '') + ' · ' + solverMeta;
@@ -286,7 +287,7 @@ async function runSolver(ids) {
     if (status) status.textContent = `Solving ${p ? p.name : id}… (${done}/${ids.length})`;
     try {
       const r = await api.adminSolvePuzzle(id);
-      if (p) { p.fullOptimal = r.fullOptimal; p.beamMoves = r.beamMoves; p.solvedAt = r.solvedAt; }
+      if (p) { p.fullOptimal = r.fullOptimal; p.beamMoves = r.beamMoves; p.minBeamWidth = r.minBeamWidth; p.solvedAt = r.solvedAt; }
     } catch {
       failed++;
     }
