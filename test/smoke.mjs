@@ -28,9 +28,13 @@ try {
   await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
   await page.waitForSelector(".card", { timeout: 15000 });
 
-  await page.fill("#nameInput", "tester");
-  await page.click("#loginForm button[type=submit]");
-  await page.waitForSelector(".who-pill", { timeout: 10000 });
+  // Navigate to the login page, register, then skip passkey to return to index.
+  await page.goto(new URL("login.html", url).href, { waitUntil: "networkidle", timeout: 15000 });
+  await page.fill("#usernameInput", "tester");
+  await page.click("button#registerBtn");
+  await page.waitForSelector("#addPasskeyArea", { state: "visible", timeout: 10000 });
+  await page.click("#skipPasskeyBtn");
+  await page.waitForSelector(".who-pill", { timeout: 15000 });
   const who = await page.$eval(".who-pill", (e) => e.textContent);
   if (!/tester/.test(who)) fail(`expected to be signed in as tester, saw "${who}"`);
 

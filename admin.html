@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>kCube — Admin</title>
+  <link rel="stylesheet" href="src/styles.css" />
+</head>
+<body class="auth-page">
+  <header class="site-head">
+    <div class="brand">
+      <a href="index.html" class="logo-link"><span class="logo">kCube</span></a>
+      <span class="tag">admin</span>
+    </div>
+    <div id="account" class="account"></div>
+  </header>
+
+  <main class="admin-main landing">
+    <section class="hero">
+      <h1>Admin</h1>
+    </section>
+
+    <section class="admin-section">
+      <h2>Users</h2>
+      <div id="userTableWrap">
+        <p class="muted">Loading…</p>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="src/admin.mjs"></script>
+</body>
+</html>

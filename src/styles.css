@@ -486,3 +486,139 @@ table.lb th { text-align: left; color: var(--muted); font-weight: 600; padding: 
 table.lb td { padding: 7px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
 table.lb tr.me { background: rgba(110, 231, 255, 0.08); }
 table.lb tr.me td:nth-child(2) { color: var(--accent); }
+
+/* ===========================================================================
+ * Auth page (login.html) and Admin page
+ * ======================================================================== */
+html:has(.auth-page) { overflow: auto; height: auto; }
+body.auth-page {
+  overflow: auto;
+  height: auto;
+  min-height: 100%;
+  user-select: auto;
+  display: flex;
+  flex-direction: column;
+}
+.auth-page .hidden { display: none !important; }
+.auth-page input { user-select: text; }
+
+.auth-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px clamp(16px, 5vw, 48px);
+}
+
+.auth-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 36px 40px;
+  width: min(96vw, 400px);
+}
+.auth-card h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: 1px; }
+.auth-intro { margin: 0 0 24px; font-size: 14px; line-height: 1.5; }
+
+.passkey-btn { width: 100%; padding: 12px; font-size: 14px; border-radius: 12px; margin-bottom: 4px; }
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.auth-divider::before, .auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.field label { font-size: 12px; color: var(--muted); letter-spacing: 0.3px; }
+.field input {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 14px;
+  outline: none;
+  width: 100%;
+}
+.field input:focus { border-color: var(--accent); }
+
+#registerBtn { width: 100%; padding: 12px; font-size: 14px; border-radius: 12px; }
+
+.auth-err {
+  color: #ff8a8a;
+  font-size: 13px;
+  margin-top: 8px;
+  display: block;
+}
+.auth-status {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--accent);
+  text-align: center;
+  display: block;
+}
+.auth-success {
+  background: rgba(62, 207, 107, 0.1);
+  border: 1px solid rgba(62, 207, 107, 0.25);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: #3ecf6b;
+  margin-bottom: 16px;
+}
+
+#addPasskeyArea { display: flex; flex-direction: column; gap: 10px; }
+#addPasskeyArea .passkey-btn { margin-bottom: 0; }
+
+.logo-link { text-decoration: none; color: inherit; }
+
+/* Admin page */
+.admin-main { max-width: 1000px; margin: 0 auto; }
+.admin-section { margin-top: 24px; }
+.admin-section h2 { font-size: 16px; letter-spacing: 0.5px; margin: 0 0 14px; color: var(--ink); }
+
+.admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin-table th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.admin-table td {
+  padding: 10px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  vertical-align: middle;
+}
+.admin-table tr:hover td { background: rgba(255, 255, 255, 0.02); }
+
+.admin-badge {
+  background: rgba(110, 231, 255, 0.12);
+  border: 1px solid rgba(110, 231, 255, 0.3);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+}
+.you-badge {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  margin-left: 4px;
+}
+.danger-btn { color: #ff8a8a !important; border-color: rgba(255, 138, 138, 0.3) !important; margin-left: 6px; }
+.danger-btn:hover { border-color: rgba(255, 138, 138, 0.7) !important; background: rgba(255, 138, 138, 0.08) !important; }
+.actions-cell { white-space: nowrap; }

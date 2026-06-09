@@ -31,7 +31,22 @@ CREATE TABLE IF NOT EXISTS users (
   username       TEXT NOT NULL,
   username_lower TEXT NOT NULL UNIQUE,   -- case-insensitive uniqueness
   token          TEXT NOT NULL UNIQUE,   -- bearer token (this app's only secret)
+  created_at     INTEGER NOT NULL,
+  is_admin       INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS passkeys (
+  credential_id  TEXT PRIMARY KEY,
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  public_key     TEXT NOT NULL,
+  counter        INTEGER NOT NULL DEFAULT 0,
   created_at     INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+  challenge   TEXT PRIMARY KEY,
+  user_id     INTEGER,
+  expires_at  INTEGER NOT NULL
 );
 
 -- Puzzle content: decoupled from slot ordering. seed feeds mulberry32 in the
@@ -94,6 +109,7 @@ function migrate(db) {
   ensureColumn(db, "attempts", "move_seq", "TEXT");
   ensureColumn(db, "levels", "puzzle_id", "INTEGER");
   ensureColumn(db, "attempts", "puzzle_id", "INTEGER");
+  ensureColumn(db, "users", "is_admin", "INTEGER NOT NULL DEFAULT 0");
 
   // Back-fill puzzle rows for any level slots that predate the puzzles table.
   // Uses the same seed formula the client falls back to offline, so existing
@@ -125,15 +141,18 @@ export class Db {
 
   /* --- users --------------------------------------------------------------- */
 
-  // Register a username, returning { id, username, token }. Throws an Error with
-  // .code === "DUP" if the name (case-insensitively) is taken.
+  // Register a username, returning { id, username, token, isAdmin }. Throws an
+  // Error with .code === "DUP" if the name (case-insensitively) is taken.
+  // The very first user created automatically becomes admin.
   createUser(username) {
     const token = randomBytes(24).toString("base64url");
+    const isFirst = this.db.prepare("SELECT COUNT(*) AS n FROM users").get().n === 0;
+    const isAdmin = isFirst ? 1 : 0;
     try {
       const r = this.db
-        .prepare("INSERT INTO users (username, username_lower, token, created_at) VALUES (?, ?, ?, ?)")
-        .run(username, username.toLowerCase(), token, now());
-      return { id: Number(r.lastInsertRowid), username, token };
+        .prepare("INSERT INTO users (username, username_lower, token, created_at, is_admin) VALUES (?, ?, ?, ?, ?)")
+        .run(username, username.toLowerCase(), token, now(), isAdmin);
+      return { id: Number(r.lastInsertRowid), username, token, isAdmin: isAdmin === 1 };
     } catch (e) {
       if (/UNIQUE/i.test(String(e && e.message))) {
         const err = new Error("username taken");
@@ -146,7 +165,79 @@ export class Db {
 
   userByToken(token) {
     if (!token) return null;
-    return this.db.prepare("SELECT id, username FROM users WHERE token = ?").get(token) || null;
+    const row = this.db.prepare("SELECT id, username, is_admin FROM users WHERE token = ?").get(token);
+    if (!row) return null;
+    return { id: row.id, username: row.username, isAdmin: row.is_admin === 1 };
+  }
+
+  // Returns full user info including token (for passkey login).
+  getUserByIdFull(userId) {
+    const row = this.db.prepare("SELECT id, username, token, is_admin FROM users WHERE id = ?").get(userId);
+    if (!row) return null;
+    return { id: row.id, username: row.username, token: row.token, isAdmin: row.is_admin === 1 };
+  }
+
+  /* --- passkeys --------------------------------------------------------------- */
+
+  createPasskey(userId, credentialId, publicKey, counter) {
+    this.db.prepare(
+      "INSERT INTO passkeys (credential_id, user_id, public_key, counter, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).run(credentialId, userId, publicKey, counter, now());
+  }
+
+  getPasskeyById(credentialId) {
+    return this.db.prepare("SELECT * FROM passkeys WHERE credential_id = ?").get(credentialId) || null;
+  }
+
+  updatePasskeyCounter(credentialId, counter) {
+    this.db.prepare("UPDATE passkeys SET counter = ? WHERE credential_id = ?").run(counter, credentialId);
+  }
+
+  getUserPasskeys(userId) {
+    return this.db.prepare(
+      "SELECT credential_id, created_at FROM passkeys WHERE user_id = ? ORDER BY created_at DESC"
+    ).all(userId);
+  }
+
+  deletePasskey(credentialId, userId) {
+    const r = this.db.prepare("DELETE FROM passkeys WHERE credential_id = ? AND user_id = ?").run(credentialId, userId);
+    return r.changes > 0;
+  }
+
+  /* --- webauthn challenges ---------------------------------------------------- */
+
+  saveChallenge(challenge, userId = null) {
+    const expiresAt = Date.now() + 5 * 60 * 1000;
+    this.db.prepare(
+      "INSERT OR REPLACE INTO webauthn_challenges (challenge, user_id, expires_at) VALUES (?, ?, ?)"
+    ).run(challenge, userId, expiresAt);
+  }
+
+  consumeChallenge(challenge) {
+    const row = this.db.prepare("SELECT * FROM webauthn_challenges WHERE challenge = ?").get(challenge);
+    if (!row) return null;
+    this.db.prepare("DELETE FROM webauthn_challenges WHERE challenge = ?").run(challenge);
+    if (row.expires_at < Date.now()) return null;
+    return row;
+  }
+
+  /* --- admin ------------------------------------------------------------------ */
+
+  listUsers() {
+    return this.db.prepare(`
+      SELECT u.id, u.username, u.is_admin AS isAdmin, u.created_at AS createdAt,
+             COUNT(p.credential_id) AS passkeyCount
+      FROM users u LEFT JOIN passkeys p ON p.user_id = u.id
+      GROUP BY u.id ORDER BY u.id ASC
+    `).all().map(r => ({ ...r, isAdmin: r.isAdmin === 1 }));
+  }
+
+  setUserAdmin(userId, isAdmin) {
+    this.db.prepare("UPDATE users SET is_admin = ? WHERE id = ?").run(isAdmin ? 1 : 0, userId);
+  }
+
+  deleteUser(userId) {
+    this.db.prepare("DELETE FROM users WHERE id = ?").run(userId);
   }
 
   /* --- puzzles ------------------------------------------------------------- */

@@ -18,6 +18,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, normalize, extname } from "node:path";
 import { openDb } from "./db.mjs";
+import { generateChallenge, verifyRegistration, verifyAssertion } from './webauthn.mjs';
 
 const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), ".."));
 
@@ -73,6 +74,17 @@ const toInt = (v) => {
 const clampLevel = (n) => (Number.isInteger(n) && n >= 1 && n <= 10000 ? n : null);
 const VALID_OUTCOME = new Set(["won", "lost", "abandoned"]);
 
+function getOrigin(req) {
+  const proto = req.headers['x-forwarded-proto'] || 'http';
+  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
+  return `${proto}://${host}`;
+}
+
+function getRpId(req) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
+  return host.split(':')[0];
+}
+
 /* --- static files ----------------------------------------------------------- */
 
 async function serveStatic(req, res, pathname) {
@@ -101,6 +113,12 @@ async function handleApi(req, res, url, db) {
   const requireUser = () => {
     const u = user();
     if (!u) { sendJson(res, 401, { error: "sign in first" }); return null; }
+    return u;
+  };
+  const requireAdmin = () => {
+    const u = requireUser();
+    if (!u) return null;
+    if (!u.isAdmin) { sendJson(res, 403, { error: 'admin required' }); return null; }
     return u;
   };
 
@@ -222,6 +240,112 @@ async function handleApi(req, res, url, db) {
       });
     }
     res.writeHead(204); return res.end();
+  }
+
+  // POST /api/auth/passkey/register/options  (requires auth)
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'register' && parts[4] === 'options') {
+    const u = requireUser(); if (!u) return;
+    const challenge = generateChallenge();
+    db.saveChallenge(challenge, u.id);
+    const rpId = getRpId(req);
+    const userIdBuf = Buffer.alloc(8);
+    userIdBuf.writeBigInt64BE(BigInt(u.id));
+    return sendJson(res, 200, {
+      challenge,
+      rp: { name: 'kCubeGL', id: rpId },
+      user: { id: userIdBuf.toString('base64url'), name: u.username, displayName: u.username },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      timeout: 60000,
+      attestation: 'none',
+      authenticatorSelection: { userVerification: 'preferred', residentKey: 'preferred' },
+    });
+  }
+
+  // POST /api/auth/passkey/register/verify  (requires auth)
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'register' && parts[4] === 'verify') {
+    const u = requireUser(); if (!u) return;
+    const body = await readJson(req);
+    if (!body.credential?.response) return sendJson(res, 400, { error: 'missing credential' });
+    let clientData;
+    try {
+      clientData = JSON.parse(Buffer.from(body.credential.response.clientDataJSON, 'base64url').toString('utf8'));
+    } catch { return sendJson(res, 400, { error: 'invalid clientDataJSON' }); }
+    const challengeRow = db.consumeChallenge(clientData.challenge);
+    if (!challengeRow) return sendJson(res, 400, { error: 'invalid or expired challenge' });
+    if (challengeRow.user_id !== u.id) return sendJson(res, 400, { error: 'challenge user mismatch' });
+    try {
+      const result = verifyRegistration(body.credential, challengeRow.challenge, getOrigin(req), getRpId(req));
+      db.createPasskey(u.id, result.credentialId, result.publicKey, result.counter);
+      return sendJson(res, 200, { ok: true });
+    } catch (e) {
+      return sendJson(res, 400, { error: `passkey registration failed: ${e.message}` });
+    }
+  }
+
+  // POST /api/auth/passkey/login/options
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'login' && parts[4] === 'options') {
+    const challenge = generateChallenge();
+    db.saveChallenge(challenge, null);
+    return sendJson(res, 200, {
+      challenge,
+      timeout: 60000,
+      rpId: getRpId(req),
+      userVerification: 'preferred',
+      allowCredentials: [],
+    });
+  }
+
+  // POST /api/auth/passkey/login/verify
+  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'login' && parts[4] === 'verify') {
+    const body = await readJson(req);
+    if (!body.assertion?.response) return sendJson(res, 400, { error: 'missing assertion' });
+    let clientData;
+    try {
+      clientData = JSON.parse(Buffer.from(body.assertion.response.clientDataJSON, 'base64url').toString('utf8'));
+    } catch { return sendJson(res, 400, { error: 'invalid clientDataJSON' }); }
+    const challengeRow = db.consumeChallenge(clientData.challenge);
+    if (!challengeRow) return sendJson(res, 400, { error: 'invalid or expired challenge' });
+    const credentialId = body.assertion.id || body.assertion.rawId;
+    const passkey = db.getPasskeyById(credentialId);
+    if (!passkey) return sendJson(res, 400, { error: 'unknown credential' });
+    try {
+      const { counter } = verifyAssertion(body.assertion, passkey.public_key, passkey.counter, challengeRow.challenge, getOrigin(req), getRpId(req));
+      db.updatePasskeyCounter(credentialId, counter);
+      const user = db.getUserByIdFull(passkey.user_id);
+      if (!user) return sendJson(res, 500, { error: 'user not found' });
+      return sendJson(res, 200, { token: user.token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
+    } catch (e) {
+      return sendJson(res, 400, { error: `passkey login failed: ${e.message}` });
+    }
+  }
+
+  // GET /api/admin/users
+  if (method === 'GET' && parts[1] === 'admin' && parts[2] === 'users' && parts.length === 3) {
+    const u = requireAdmin(); if (!u) return;
+    return sendJson(res, 200, db.listUsers());
+  }
+
+  // PATCH /api/admin/users/:id  { isAdmin }
+  if (method === 'PATCH' && parts[1] === 'admin' && parts[2] === 'users' && parts.length === 4) {
+    const u = requireAdmin(); if (!u) return;
+    const targetId = toInt(parts[3]);
+    if (!targetId) return sendJson(res, 400, { error: 'bad user id' });
+    const body = await readJson(req);
+    if (targetId === u.id && body.isAdmin === false) {
+      return sendJson(res, 400, { error: "can't remove your own admin status" });
+    }
+    db.setUserAdmin(targetId, body.isAdmin);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // DELETE /api/admin/users/:id
+  if (method === 'DELETE' && parts[1] === 'admin' && parts[2] === 'users' && parts.length === 4) {
+    const u = requireAdmin(); if (!u) return;
+    const targetId = toInt(parts[3]);
+    if (!targetId) return sendJson(res, 400, { error: 'bad user id' });
+    if (targetId === u.id) return sendJson(res, 400, { error: "can't delete yourself" });
+    db.deleteUser(targetId);
+    return sendJson(res, 200, { ok: true });
   }
 
   return sendJson(res, 404, { error: "not found" });

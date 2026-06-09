@@ -18,7 +18,7 @@ const TOKEN_KEY = "kcube.token";
 export function getToken() {
   try { return localStorage.getItem(TOKEN_KEY) || null; } catch { return null; }
 }
-function setToken(t) {
+export function setToken(t) {
   try { localStorage.setItem(TOKEN_KEY, t); } catch { /* ignore */ }
 }
 export function clearToken() {
@@ -122,4 +122,36 @@ export function abandonBeacon(id, { movesUsed, durationMs }) {
   try {
     navigator.sendBeacon(BASE + `/attempts/${id}/abandon`, new Blob([payload], { type: "application/json" }));
   } catch { /* ignore */ }
+}
+
+/* --- Passkeys ---------------------------------------------------------------- */
+
+export function getPasskeyRegisterOptions() {
+  return tryReq('POST', '/auth/passkey/register/options');
+}
+
+export async function verifyPasskeyRegistration(credential) {
+  return request('POST', '/auth/passkey/register/verify', { credential });
+}
+
+export function getPasskeyLoginOptions() {
+  return tryReq('POST', '/auth/passkey/login/options');
+}
+
+export async function verifyPasskeyLogin(assertion) {
+  return request('POST', '/auth/passkey/login/verify', { assertion });
+}
+
+/* --- Admin ------------------------------------------------------------------ */
+
+export function adminListUsers() {
+  return tryReq('GET', '/admin/users');
+}
+
+export async function adminUpdateUser(id, data) {
+  return request('PATCH', `/admin/users/${id}`, data);
+}
+
+export async function adminDeleteUser(id) {
+  return request('DELETE', `/admin/users/${id}`, {});
 }
