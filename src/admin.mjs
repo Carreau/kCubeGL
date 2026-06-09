@@ -176,7 +176,7 @@ function renderPuzzles() {
 async function boot() {
   const online = await api.probe();
   if (!online) {
-    $('userTableWrap').innerHTML = '<p class="muted">Server offline.</p>';
+    $('userTableWrap').innerHTML = "<p class=\"muted\">Can't reach the server right now — admin needs it running.</p>";
     return;
   }
   currentUser = await api.me();

@@ -11,8 +11,8 @@ Key features:
 - Guaranteed-solvable, **deterministic** puzzles (reverse-scrambled from a solved board). Puzzles are a **fixed, named catalogue** — no level numbers, no infinite auto-create: a pool of ~40 puzzles with randomly generated names (e.g. `ochre-bramble`) and varied — *not* monotonically increasing — cube counts and scramble depths, all derived from one master seed so every player gets the same catalogue
 - View rotation (Q/E keys) and solution playback
 - A landing page (`index.html`) that lists the catalogue and lets you **sort by difficulty** (failure rate, world-best moves over scramble length, cube count, name), separate from the game page (`play.html?puzzle=<name>`)
-- An **optional backend** (`server/`) using Node's built-in `node:sqlite`: username accounts (bearer-token auth), leaderboards, per-attempt tracking that feeds puzzle-difficulty and player-skill stats, and an **admin** page to pin/order which puzzles are featured first
-- Best scores persist in `localStorage` (keyed by puzzle name); the game runs fully even with no backend (the API client degrades gracefully)
+- A **backend** (`server/`) using Node's built-in `node:sqlite` — the source of truth for the catalogue, username accounts (bearer-token auth), leaderboards, per-attempt tracking that feeds puzzle-difficulty and player-skill stats, and an **admin** page to pin/order which puzzles are featured first. Submitting scores and fetching puzzles assume the server is there.
+- Best scores also persist in `localStorage` (keyed by puzzle name); if the server is briefly unreachable the client falls back to a cold-start cache (the deterministic catalogue computed locally) so play isn't blocked, but the server is the norm — not an optional add-on
 
 ## Commands
 
@@ -20,7 +20,7 @@ Key features:
 
 ```bash
 npm start              # Full app + API + SQLite on http://localhost:8080 (server/server.mjs)
-npm run static         # Static-only server (no backend; localStorage fallback)
+npm run static         # Static-only server (no backend; cold-start cache + localStorage)
 npm run dev            # Alternative static server: Python HTTP server on port 8080
 npm run check          # Syntax-check all source + server files
 npm test               # API integration test + headless browser smoke test
@@ -35,10 +35,10 @@ npm run test:smoke     # Headless Playwright end-to-end test only
 **Frontend (browser):**
 - **index.html** — Landing page: the puzzle catalogue (with a difficulty sort control), sign-in, per-puzzle leaderboard/difficulty detail. Loads `src/index.mjs`.
 - **play.html** — The game page: import map (Three.js 0.160.0), HUD (puzzle-name/moves/cubes/best/world badges), overlay panels, back-to-puzzles link. Loads `src/main.js`. Reads the puzzle from `?puzzle=<name>`.
-- **src/main.js** — All game logic, rendering, roll animation, and the attempt lifecycle (reports start/win/lose/abandon to the backend, offline-safe).
+- **src/main.js** — All game logic, rendering, roll animation, and the attempt lifecycle (reports start/win/lose/abandon to the backend; best-effort if it's briefly unreachable).
 - **src/index.mjs** — Landing-page logic (account widget, catalogue grid + sorting, detail dialog).
 - **src/admin.mjs** — Admin-page logic (user management + featured-puzzle pin/order UI).
-- **src/api.mjs** — Offline-safe browser client for the JSON API (token storage + fetch wrappers; every call no-ops to null with no server).
+- **src/api.mjs** — Resilient browser client for the JSON API (token storage + fetch wrappers; calls no-op to null if the server is briefly unreachable so the UI can fall back to the cold-start cache).
 - **src/shared.mjs** — Dependency-free puzzle math (seeded PRNG, `buildCatalog`, `catalogByName`, `budgetFor`) imported by BOTH the game and the server. Defines the deterministic catalogue. Must not import Three.js or touch the DOM.
 - **src/styles.css** — HUD, landing page, admin, and overlay styling.
 
@@ -80,7 +80,7 @@ Puzzles are **generated backwards**: start with a solved board (all cubes one co
 
 ### Persistence
 
-- **Local best scores**: `localStorage` under key `kcube.v1` as `{ best: { <puzzleName>: movesUsed }, cleared }`. Works with no backend.
+- **Local best scores**: `localStorage` under key `kcube.v1` as `{ best: { <puzzleName>: movesUsed }, cleared }`. Kept alongside the server so a brief outage never loses your record.
 - **Auth token**: `localStorage` key `kcube.token` (a bearer token minted by `POST /api/users`).
 - **Backend (optional)**: SQLite via `server/db.mjs`. The schema is **attempt-centric** — one `attempts` row per started board, stamped with an outcome (`won`/`lost`/`abandoned`), `moves_used` and `duration_ms`. Best-scores are `MIN(moves_used)` over winning attempts; difficulty and skill are aggregates over the same rows.
 
@@ -134,7 +134,7 @@ Other animations (overlay fade, cube scale on win) use CSS transitions.
 - **No bundler or build step** — serves as raw ES modules; Three.js must be available at runtime. The backend likewise uses only Node built-ins (no native deps), preserving the no-install spirit.
 - **Node ≥ 22.5** — the backend depends on the built-in `node:sqlite` module. CI runs on Node 22.
 - **Shared code stays pure** — `src/shared.mjs` is imported by both browser and server, so it must not import Three.js or touch the DOM.
-- **Backend is optional** — `src/api.mjs` calls must remain offline-safe (no-op to null on failure); the game must stay fully playable as static files on `localStorage`.
+- **Backend is the norm, client is resilient** — the server is the source of truth, but `src/api.mjs` calls must stay best-effort (no-op to null on failure) so a brief outage falls back to the cold-start cache (deterministic catalogue + `localStorage`) instead of breaking. Don't over-rely on the DB on the hot path, and don't bake in hard assumptions that the server is *always* reachable.
 - **Deterministic puzzles** — keep all catalogue and board-generation randomness on the seeded PRNGs (`CATALOG_SEED` in `buildCatalog`, `config.seed` in `buildLevel`); never `Math.random()` in those paths, or puzzles/names diverge across users and leaderboards break.
 - **Single event loop** — async game operations (renders, animations, level transitions) are orchestrated via frame callbacks
 - **Quaternion arithmetic** — rotations are applied via quaternion multiplication; understanding quaternion order (q1 * q2 applies q2 first) is essential for correct roll behavior

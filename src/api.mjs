@@ -1,12 +1,13 @@
 /* ============================================================================
  * Browser ⇄ backend API client.
  *
- * Thin wrapper over fetch for the optional kCube backend (server/server.mjs).
- * EVERY call is offline-safe: if the server isn't there (e.g. the game is
- * served as plain static files, or hosting is down), calls resolve to null
- * instead of throwing, so the game keeps working on localStorage alone. The
- * only call that surfaces errors is createUser, because the UI needs to tell
- * the player "that name is taken".
+ * Thin wrapper over fetch for the kCube backend (server/server.mjs), the source
+ * of truth for accounts, the catalogue, leaderboards and difficulty stats.
+ * Calls are resilient rather than offline-first: if the server is briefly
+ * unreachable they resolve to null instead of throwing, so the UI can fall back
+ * to a cold-start cache and the player keeps moving until it's back. The only
+ * call that surfaces errors is createUser, because the UI needs to tell the
+ * player "that name is taken".
  *
  * Auth is a bearer token: createUser() mints one and stores it; every later
  * call sends it as `Authorization: Bearer <token>`.

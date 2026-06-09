@@ -355,10 +355,11 @@ const game = {
   solving: false, // true while auto-playing the solution
   solveQueue: [],
   walk: null, // active cursor-walk animation between solution moves
-  // Puzzle config fetched from the server (or computed offline). Stored so that
-  // retryLevel can rebuild without re-fetching if game.initial is somehow empty.
+  // Puzzle config fetched from the server (or from the cold-start cache when it's
+  // briefly unreachable). Stored so that retryLevel can rebuild without
+  // re-fetching if game.initial is somehow empty.
   puzzleConfig: null,
-  // Backend attempt tracking (offline-safe — null/0 when no server is present).
+  // Backend attempt tracking (resilient — null/0 while the server is unreachable).
   attemptId: null, // id of the in-progress attempt on the server
   attemptStart: 0, // performance.now() when the attempt began (for duration)
   username: null, // logged-in player name, if any (shown in the HUD)
@@ -524,8 +525,8 @@ function applyRollLogic(cube, dir, nr, nc) {
 function buildLevel(config) {
   // Seed all randomness from the puzzle's seed so this exact board is reproduced
   // identically on every device — the basis for fair leaderboards. The config
-  // comes from the server with a local fallback (the deterministic catalogue) for
-  // offline play.
+  // comes from the server, with the deterministic catalogue as a cold-start cache
+  // when it's briefly unreachable.
   rng = mulberry32(config.seed);
 
   // Pick which face color is "solved" for this puzzle, and set the initial cube
@@ -986,8 +987,8 @@ function hideOverlay() {
 /* --- Backend attempt tracking ----------------------------------------------
  * Every time a player starts a board we open an "attempt" on the server and
  * close it with an outcome (won / lost / abandoned). These rows are what later
- * powers skill and difficulty analysis. All calls are best-effort: with no
- * backend they quietly no-op and the game runs on localStorage alone.
+ * powers skill and difficulty analysis. All calls are best-effort: if the server
+ * is briefly unreachable they quietly no-op and the game keeps running.
  * ------------------------------------------------------------------------- */
 
 // Resolve the stored token to a username for the HUD ("playing as …").
@@ -1063,13 +1064,14 @@ async function startLevel(name) {
 
   // One request serves two purposes: derive the puzzle config (seed + params)
   // and pre-load world-best so beginAttempt can show it without a second fetch.
-  // Falls back to the deterministic catalogue when the backend is unreachable.
+  // Falls back to the deterministic catalogue (cold-start cache) when the server
+  // is briefly unreachable.
   const puzzleInfo = await api.getPuzzle(name);
-  const offline = catalogByName(name);
+  const cached = catalogByName(name);
   const config = (puzzleInfo && puzzleInfo.seed != null)
     ? { seed: puzzleInfo.seed, numCubes: puzzleInfo.numCubes, scramble: puzzleInfo.scramble, par: puzzleInfo.par }
-    : (offline
-        ? { seed: offline.seed, numCubes: offline.numCubes, scramble: offline.scramble, par: offline.par }
+    : (cached
+        ? { seed: cached.seed, numCubes: cached.numCubes, scramble: cached.scramble, par: cached.par }
         : null);
   if (!config) { goToLevels(); return; } // unknown puzzle name — bail to the picker
 

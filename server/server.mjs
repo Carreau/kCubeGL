@@ -9,8 +9,9 @@
  *   npm start            # run it on http://localhost:8080
  *   KCUBE_DB=:memory: …  # use an in-memory DB (tests do this)
  *
- * Served as plain static files instead (no server), the game still works on
- * localStorage; the API simply isn't there and the client degrades gracefully.
+ * This server is the norm. Served as plain static files instead (no backend),
+ * the game still renders from its cold-start cache and localStorage — the API
+ * simply isn't there — but accounts, leaderboards and stats need it running.
  * ========================================================================== */
 
 import http from "node:http";
