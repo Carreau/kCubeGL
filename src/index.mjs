@@ -136,32 +136,59 @@ async function loadGrid() {
   renderGrid();
 }
 
+// One puzzle card.
+function cardHtml(p) {
+  const solved = p.yourBest != null;
+  const over = overScramble(p);
+  return (
+    `<div class="card${solved ? " solved" : ""}" data-name="${esc(p.name)}" tabindex="0" role="button">` +
+      `<div class="card-top"><span class="lvl">${esc(p.name)}</span>` +
+      (p.pinned ? `<span class="pin-badge" title="featured">★</span>` : "") +
+      `<span class="dot" title="${solved ? "solved" : "unsolved"}"></span></div>` +
+      `<div class="card-mid muted">${p.numCubes} cubes · par ${p.par}` +
+      (p.optimal ? ` · best-known ${p.optimal}` : "") + `</div>` +
+      `<div class="card-stats">` +
+        `<span>you <b>${dash(p.yourBest)}</b></span>` +
+        `<span>world <b>${dash(p.worldBest)}</b></span>` +
+        (p.attempts ? `<span class="muted" title="failure rate across all players">${pct(p.failRate)} fail</span>` : "") +
+        (over != null ? `<span class="muted" title="world best over scramble length">+${over} over</span>` : "") +
+      `</div>` +
+      `<div class="card-actions">` +
+        `<span class="play-hint">Play ▸</span>` +
+        `<button class="lb-btn link-btn" type="button" data-name="${esc(p.name)}">Leaderboard</button>` +
+      `</div>` +
+    `</div>`
+  );
+}
+
+// Render the catalogue split into a "Featured" group (pinned puzzles, in admin
+// order) and an "All puzzles" group (the rest), each sorted by the active key.
+// With nothing pinned, fall back to a single ungrouped grid.
 function renderGrid() {
   const cmp = SORTS[state.sort];
-  const list = cmp ? [...state.puzzles].sort(cmp) : state.puzzles;
-  $("grid").innerHTML = list.map((p) => {
-    const solved = p.yourBest != null;
-    const over = overScramble(p);
-    return (
-      `<div class="card${solved ? " solved" : ""}" data-name="${esc(p.name)}" tabindex="0" role="button">` +
-        `<div class="card-top"><span class="lvl">${esc(p.name)}</span>` +
-        (p.pinned ? `<span class="pin-badge" title="featured">★</span>` : "") +
-        `<span class="dot" title="${solved ? "solved" : "unsolved"}"></span></div>` +
-        `<div class="card-mid muted">${p.numCubes} cubes · par ${p.par}` +
-        (p.optimal ? ` · best-known ${p.optimal}` : "") + `</div>` +
-        `<div class="card-stats">` +
-          `<span>you <b>${dash(p.yourBest)}</b></span>` +
-          `<span>world <b>${dash(p.worldBest)}</b></span>` +
-          (p.attempts ? `<span class="muted" title="failure rate across all players">${pct(p.failRate)} fail</span>` : "") +
-          (over != null ? `<span class="muted" title="world best over scramble length">+${over} over</span>` : "") +
-        `</div>` +
-        `<div class="card-actions">` +
-          `<span class="play-hint">Play ▸</span>` +
-          `<button class="lb-btn link-btn" type="button" data-name="${esc(p.name)}">Leaderboard</button>` +
-        `</div>` +
-      `</div>`
-    );
-  }).join("");
+  const sortGroup = (arr) => (cmp ? [...arr].sort(cmp) : arr);
+  const grid = $("grid");
+
+  const pinned = state.puzzles.filter((p) => p.pinned);
+  const others = state.puzzles.filter((p) => !p.pinned);
+
+  if (pinned.length === 0) {
+    grid.classList.remove("grouped");
+    grid.innerHTML = sortGroup(others).map(cardHtml).join("");
+    return;
+  }
+
+  const group = (title, hint, items) =>
+    `<section class="level-group">` +
+      `<h3 class="group-head">${title}<span class="muted group-count">${items.length}</span>` +
+      (hint ? `<span class="muted group-hint">${hint}</span>` : "") + `</h3>` +
+      `<div class="grid">${items.map(cardHtml).join("")}</div>` +
+    `</section>`;
+
+  grid.classList.add("grouped");
+  grid.innerHTML =
+    group(`<span class="pin-badge">★</span> Featured`, "hand-picked", sortGroup(pinned)) +
+    group("All puzzles", "", sortGroup(others));
 }
 
 function go(name) { location.href = `play.html?puzzle=${encodeURIComponent(name)}`; }

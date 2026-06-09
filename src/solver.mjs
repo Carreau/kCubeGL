@@ -148,6 +148,76 @@ export function bfsSolve(initialState, { maxDepth = 20, maxNodes = 60000 } = {})
   return null;
 }
 
+/* --- Beam search (approximate, tight upper bound) ----------------------------- */
+
+// An admissible-style progress measure for a state (lower = closer to solved):
+// how many cubes are NOT showing the most-common top colour, plus how many extra
+// disconnected islands remain. Used to rank beam-search candidates.
+function remainingEstimate(state) {
+  const counts = new Array(6).fill(0);
+  for (const c of state.cubes) counts[topColor(c)]++;
+  const colorGap = state.cubes.length - Math.max(...counts);
+
+  const seen = new Set();
+  let components = 0;
+  for (const c of state.cubes) {
+    if (seen.has(c.id)) continue;
+    components++;
+    for (const k of getIsland(state.cubes, c.id)) seen.add(k.id);
+  }
+  return colorGap + (components - 1);
+}
+
+// Greedy best-first beam: keep the `width` most promising states per depth layer,
+// ranked by remainingEstimate. Not optimal, but it solves boards the simple
+// greedy solver gets stuck on and returns a tight upper bound on the roll count.
+// Returns [{id, dir}, …] or null if no solution was found within the budget.
+export function beamSolve(initialState, { width = 300, maxDepth = 80 } = {}) {
+  if (isWon(initialState)) return [];
+
+  // Nodes keep a parent pointer + move so the winning path can be reconstructed
+  // without copying the whole move list into every candidate.
+  const nodes = [{ state: initialState, parent: -1, move: null }];
+  const seen = new Set([stateKey(initialState)]);
+  let frontier = [0]; // indices into `nodes`
+
+  for (let depth = 0; depth < maxDepth; depth++) {
+    const children = [];
+    for (const idx of frontier) {
+      const { state } = nodes[idx];
+      for (const cube of getIsland(state.cubes, state.cursorId)) {
+        for (const dir of DIRS) {
+          const nr = cube.r + ROLL_DR[dir], nc = cube.c + ROLL_DC[dir];
+          if (!inBounds(nr, nc) || cubeAt(state.cubes, nr, nc)) continue;
+
+          const ns = applyRoll(state, cube.id, dir);
+          const key = stateKey(ns);
+          if (seen.has(key)) continue;
+          seen.add(key);
+
+          const nidx = nodes.length;
+          nodes.push({ state: ns, parent: idx, move: { id: cube.id, dir } });
+
+          if (isWon(ns)) {
+            const path = [];
+            for (let k = nidx; nodes[k].parent !== -1; k = nodes[k].parent)
+              path.push(nodes[k].move);
+            return path.reverse();
+          }
+          children.push(nidx);
+        }
+      }
+    }
+    if (!children.length) return null;
+    // Keep only the most promising `width` states for the next layer. The sort is
+    // stable in V8, so ties resolve by insertion order — keeping this solver
+    // deterministic, which matters for reproducible difficulty values.
+    children.sort((a, b) => remainingEstimate(nodes[a].state) - remainingEstimate(nodes[b].state));
+    frontier = children.slice(0, width);
+  }
+  return null;
+}
+
 /* --- Helpers shared by greedy ------------------------------------------------ */
 
 // BFS over the 24 discrete cube orientations. With only 4 roll directions the

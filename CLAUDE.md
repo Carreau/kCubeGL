@@ -37,10 +37,12 @@ npm run test:smoke     # Headless Playwright end-to-end test only
 - **play.html** — The game page: import map (Three.js 0.160.0), HUD (puzzle-name/moves/cubes/best/world badges), overlay panels, back-to-puzzles link. Loads `src/main.js`. Reads the puzzle from `?puzzle=<name>`.
 - **src/main.js** — All game logic, rendering, roll animation, and the attempt lifecycle (reports start/win/lose/abandon to the backend; best-effort if it's briefly unreachable).
 - **src/index.mjs** — Landing-page logic (account widget, catalogue grid + sorting, detail dialog).
-- **src/admin.mjs** — Admin-page logic (user management + featured-puzzle pin/order UI).
+- **src/admin.mjs** — Admin-page logic (user management; featured-puzzle pin/order UI with drag-to-reorder + unsaved-state indicator; the explicit "Run solver" step that fills in per-puzzle difficulty).
 - **src/api.mjs** — Resilient browser client for the JSON API (token storage + fetch wrappers; calls no-op to null if the server is briefly unreachable so the UI can fall back to the cold-start cache).
 - **src/shared.mjs** — Dependency-free puzzle math (seeded PRNG, `buildCatalog`, `catalogByName`, `budgetFor`) imported by BOTH the game and the server. Defines the deterministic catalogue. Must not import Three.js or touch the DOM.
-- **src/styles.css** — HUD, landing page, admin, and overlay styling.
+- **src/solver.mjs** — Pure-state solvers (no Three.js): `bfsSolve` (provably-optimal "full solver"), `greedySolve`, and `beamSolve` (approximate, tight upper bound). Operate on a plain `{cubes:[{id,r,c,faces}], cursorId}` state.
+- **src/catalog-solve.mjs** — Pure reproduction of a catalogue puzzle's scrambled board (a tiny self-contained quaternion port of `buildLevel`, drawing the same seeded RNG in the same order), then runs the solvers. Used by the server's admin solver step to compute real difficulty signals without Three.js. Must stay pure.
+- **src/styles.css** — HUD, landing page (with a Featured / All puzzles split), admin, and overlay styling.
 
 **Backend (Node):**
 - **server/server.mjs** — `node:http` server: serves static files and routes `/api/*` to JSON handlers.
@@ -86,10 +88,10 @@ Puzzles are **generated backwards**: start with a solved board (all cubes one co
 
 ### Backend & Data Model
 
-- **Tables**: `users(id, username, username_lower UNIQUE, token UNIQUE, is_admin, …)`, `puzzles(id PK, name UNIQUE, seed, num_cubes, scramble, par, optimal, pinned, sort_order, …)`, `attempts(id, user_id, puzzle_id, outcome, moves_used, duration_ms, move_seq, started_at, ended_at)`. The puzzle **`id` is the opaque key** everything references; `name` is the stable public handle. `seedCatalog()` idempotently inserts the catalogue (matched on `name`) on every `openDb`.
+- **Tables**: `users(id, username, username_lower UNIQUE, token UNIQUE, is_admin, …)`, `puzzles(id PK, name UNIQUE, seed, num_cubes, scramble, par, optimal, pinned, sort_order, full_optimal, beam_moves, solved_at, …)` (the last three hold the admin-run solver difficulty signals), `attempts(id, user_id, puzzle_id, outcome, moves_used, duration_ms, move_seq, started_at, ended_at)`. The puzzle **`id` is the opaque key** everything references; `name` is the stable public handle. `seedCatalog()` idempotently inserts the catalogue (matched on `name`) on every `openDb`.
 - **Identity**: puzzles are addressed by `name` in URLs and the API; the server resolves a name to its `id` for FKs. No level numbers anywhere.
 - **Attempt lifecycle** (in `src/main.js`): `beginAttempt()` → `POST /api/attempts {puzzle}` on entering a board; `finalizeAttempt(outcome)` → `PATCH /api/attempts/:id` on win/lose, and `"abandoned"` on retry / leaving (a `sendBeacon` to `/abandon` covers page unload).
-- **Key endpoints**: `POST /api/users`, `GET /api/me`, `GET /api/me/stats`, `GET /api/puzzles` (full catalogue, pinned first, with difficulty signals), `GET /api/puzzles/:name` (metadata + leaderboard + difficulty stats), `POST /api/attempts`, `PATCH /api/attempts/:id`. **Admin**: `GET /api/admin/users`, `GET /api/admin/puzzles`, `PUT /api/admin/puzzles/order {ids}` (set the pinned/featured order), `PATCH /api/admin/puzzles/:id {pinned, sortOrder}`.
+- **Key endpoints**: `POST /api/users`, `GET /api/me`, `GET /api/me/stats`, `GET /api/puzzles` (full catalogue, pinned first, with difficulty signals), `GET /api/puzzles/:name` (metadata + leaderboard + difficulty stats), `POST /api/attempts`, `PATCH /api/attempts/:id`. **Admin**: `GET /api/admin/users`, `GET /api/admin/puzzles`, `PUT /api/admin/puzzles/order {ids}` (set the pinned/featured order), `PATCH /api/admin/puzzles/:id {pinned, sortOrder}`, `POST /api/admin/puzzles/:id/solve` (explicit, admin-triggered: runs the full/BFS + beam solvers for that board via `src/catalog-solve.mjs` and persists `full_optimal`/`beam_moves`/`solved_at`). Solving is slow on the hardest boards, so it is never run at boot — only on demand.
 - **Analytics queries** live in `server/db.mjs`: `leaderboard`, `puzzleStats` (win/fail rate, avg attempts to first solve / to personal best), `userStats` (solve rate, avg moves over best-known, avg solve time), `listPuzzles` (catalogue + per-puzzle difficulty signals for the landing page).
 
 ### Win Condition

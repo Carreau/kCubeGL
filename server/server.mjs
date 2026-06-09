@@ -365,6 +365,20 @@ async function handleApi(req, res, url, db) {
     return sendJson(res, 200, db.listPuzzles(u.id));
   }
 
+  // POST /api/admin/puzzles/:id/solve  — run the full (BFS) + beam solvers for
+  // one puzzle and persist the results. Explicit, admin-triggered step; it can
+  // block for a few seconds on the hardest boards, so it's never run at boot.
+  if (method === 'POST' && parts[1] === 'admin' && parts[2] === 'puzzles' && parts[4] === 'solve' && parts.length === 5) {
+    const u = requireAdmin(); if (!u) return;
+    const id = toInt(parts[3]);
+    if (!id) return sendJson(res, 400, { error: 'bad puzzle id' });
+    try {
+      return sendJson(res, 200, db.solvePuzzle(id));
+    } catch (e) {
+      return sendJson(res, 404, { error: e.message });
+    }
+  }
+
   // PUT /api/admin/puzzles/order  { ids: [...] }  — set the exact pinned order.
   if (method === 'PUT' && parts[1] === 'admin' && parts[2] === 'puzzles' && parts[3] === 'order') {
     const u = requireAdmin(); if (!u) return;

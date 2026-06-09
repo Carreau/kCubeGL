@@ -418,6 +418,29 @@ body.landing-page {
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 14px;
 }
+/* When the catalogue is split into Featured / All groups, #grid stacks the
+   groups vertically while each group keeps its own card grid. */
+.grid.grouped { display: block; }
+.level-group + .level-group { margin-top: 28px; }
+.group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+.group-head .pin-badge { color: var(--accent); }
+.group-head .group-count {
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  padding: 1px 8px;
+  letter-spacing: 0;
+}
+.group-head .group-hint { font-size: 11px; text-transform: none; letter-spacing: 0; margin-left: auto; }
 .card {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -641,4 +664,26 @@ body.auth-page {
 .puzzle-meta { flex: 1; font-size: 12px; }
 .puzzle-actions { white-space: nowrap; display: flex; gap: 4px; }
 .puzzle-actions .link-btn[disabled] { opacity: 0.3; cursor: default; }
-.puzzle-save { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.puzzle-save { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.puzzle-save .primary[disabled],
+.puzzle-save .link-btn[disabled] { opacity: 0.4; cursor: default; pointer-events: none; }
+
+/* Solver difficulty signals shown in each admin row. */
+.solver-meta { color: var(--accent, #7aa2ff); }
+.solver-meta.unsolved { color: var(--muted); }
+
+/* Solver run toolbar. */
+.solver-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.solver-bar .primary[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
+
+/* Drag-to-reorder featured puzzles. */
+.puzzle-row.draggable { cursor: grab; }
+.puzzle-row.draggable:active { cursor: grabbing; }
+.drag-handle { color: var(--muted); cursor: grab; user-select: none; font-size: 14px; line-height: 1; }
+.puzzle-row.dragging { opacity: 0.45; background: rgba(255, 255, 255, 0.04); }
+.puzzle-row.drop-target { box-shadow: inset 0 2px 0 var(--accent, #7aa2ff); }
+.drag-hint { font-size: 11px; margin: 0 0 6px; }
+
+/* Unsaved-state indicators. */
+.unsaved-badge { color: #ffd23f; font-size: 12px; font-weight: 600; }
+.unsaved-dot { color: #ffd23f; }
