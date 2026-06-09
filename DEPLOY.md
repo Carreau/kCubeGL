@@ -25,12 +25,14 @@ just runs `node server/server.mjs` on Node 22 (required for `node:sqlite`).
    | `HOST`      | `0.0.0.0`             | Bind address (keep `0.0.0.0` in Docker).|
    | `KCUBE_DB`  | `/data/kcube.sqlite`  | SQLite file path (on the volume).      |
    | `NODE_ENV`  | `production`          | —                                      |
+   | `KCUBE_ADMIN_TOKEN` | *(unset)*     | Bootstrap secret to mint an admin (see below). |
+   | `KCUBE_TRUST_PROXY` | *(unset)*     | Set to `1`/`true` behind a TLS-terminating proxy (see below). |
 
 6. **Health check:** the app exposes `GET /api/health` → `{ "ok": true }`. The
    Dockerfile already declares a container `HEALTHCHECK` against it; you can also
    point Coolify's health check at `/api/health`.
-7. **Deploy.** Once healthy, the landing page is at `/` and a level is at
-   `/play.html?level=1`.
+7. **Deploy.** Once healthy, the landing page is at `/` and a puzzle is at
+   `/play.html?puzzle=<name>` (named catalogue — there are no level numbers).
 
 ## Notes
 
@@ -39,8 +41,19 @@ just runs `node server/server.mjs` on Node 22 (required for `node:sqlite`).
   accounts and leaderboards work.
 - **Data persistence.** Only the `/data` volume matters. Redeploying rebuilds
   the image but leaves the volume (and therefore all scores) intact.
-- **No secrets required.** The only secret the app mints is per-user bearer
-  tokens, stored in the DB; there is nothing to configure.
+- **Bootstrapping an admin.** Admin is granted only when `POST /api/users`
+  includes an `adminToken` matching `KCUBE_ADMIN_TOKEN`. Set that env var to a
+  secret of your choice and use it once to create the admin account; if it's
+  unset, no new admins can be minted via the API.
+- **Passkeys behind a proxy.** WebAuthn/passkey login needs a stable HTTPS
+  origin. Coolify's proxy terminates TLS and forwards `X-Forwarded-Host`/
+  `X-Forwarded-Proto`, so set **`KCUBE_TRUST_PROXY=1`** for the server to trust
+  those headers when deriving the WebAuthn origin/RP-ID — otherwise the origin
+  (and passkeys) will be wrong.
+- **Env config.** Neither env var is strictly required to just run the game, but
+  `KCUBE_ADMIN_TOKEN` (to create an admin) and `KCUBE_TRUST_PROXY` (behind a
+  proxy) are the two settings worth configuring. The per-user bearer tokens the
+  app mints are stored in the DB and need no configuration.
 
 ## Run it locally with Docker
 

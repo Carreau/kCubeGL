@@ -335,19 +335,6 @@ body.landing-page {
   border-color: rgba(255, 255, 255, 0.14);
   color: var(--muted);
 }
-.login { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.login input {
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  color: var(--ink);
-  border-radius: 999px;
-  padding: 7px 14px;
-  font-size: 13px;
-  outline: none;
-}
-.login input:focus { border-color: var(--accent); }
-.login-err { color: #ff8a8a; font-size: 12px; }
-
 .primary {
   appearance: none;
   border: none;
@@ -378,8 +365,6 @@ body.landing-page {
   padding: 10px 14px;
   font-size: 13px;
 }
-.offline code, .detail code { background: rgba(255, 255, 255, 0.1); padding: 1px 6px; border-radius: 6px; }
-
 /* stat chips (your record + difficulty) */
 .mystats { margin-top: 22px; }
 .mystats h2, .levels-head h2 { font-size: 16px; letter-spacing: 0.5px; margin: 0 0 12px; color: var(--ink); }
@@ -400,7 +385,6 @@ body.landing-page {
 
 .levels { margin-top: 34px; }
 .levels-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.count input,
 .count select {
   background: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -409,7 +393,6 @@ body.landing-page {
   padding: 4px 8px;
   font-size: 13px;
 }
-.count input { width: 56px; }
 .count select { cursor: pointer; }
 .count select option { background: #14161c; color: var(--ink); }
 

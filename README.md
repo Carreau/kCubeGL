@@ -32,7 +32,7 @@ connection returns. You can also serve the game as plain static files (no
 accounts or leaderboards) for a CDN-only deploy:
 
 ```bash
-npm run static       # static-only server (no backend)
+npm run dev          # static only (no backend): Python http.server on 8080
 # or
 python3 -m http.server 8080
 ```
@@ -52,7 +52,8 @@ required either way.
   scramble depths, all derived from one master seed — so a given puzzle is an
   identical board on every device, which makes the best score a genuine record.
   Admins can pin/order which puzzles are featured first.
-- **Sign in with a name** (no password) to land on the leaderboards. The server
+- **Sign in with a name** (no password) to land on the leaderboards, and
+  optionally add a **passkey** for secure WebAuthn login on later visits. The server
   records every *attempt* — won, lost or abandoned — with its move count and
   duration. From those rows it derives per-puzzle **difficulty** (win rate, avg
   attempts to first solve / to a personal best) and per-player **skill** (solve
@@ -109,15 +110,19 @@ required either way.
 ```
 index.html         landing page: puzzle catalogue + difficulty sort, leaderboards
 play.html          the game page (import map for Three.js) + HUD/overlay
+login.html         sign-in / account page: username + passkey (WebAuthn) login
 admin.html         admin page: user management + featured-puzzle pin/order
 src/index.mjs      landing-page logic (catalogue grid, sorting, account, detail)
+src/login.mjs      sign-in logic (username registration + passkey ceremonies)
 src/admin.mjs      admin-page logic (users + puzzle pin/order)
-src/main.js        game logic, board generation, rendering and roll animation
+src/main.js        game logic, rendering and roll animation (renders generateLevel)
+src/level-gen.mjs  pure board generation: seeded scramble + quaternion/connectivity
 src/api.mjs        resilient browser client for the backend API
 src/shared.mjs     dependency-free puzzle catalogue + math shared by game + server
 src/styles.css     HUD, landing page, admin and overlay styling
 server/server.mjs  HTTP server: static files + JSON API (node:http)
 server/db.mjs      SQLite data layer + analytics queries (node:sqlite)
+server/webauthn.mjs WebAuthn/passkey helpers (challenge + verify)
 test/api.mjs       backend API integration test (no browser)
 test/smoke.mjs     end-to-end smoke test (Playwright, headless browser)
 ```
@@ -128,10 +133,12 @@ Implemented: 5×5 board, bevelled dice, arrow-key cursor & rolling, animated
 tip-over, **deterministic** solvable puzzle generation, contiguous-block win
 condition, herding-aware move budget, carried bonus, Q/E view rotation,
 show-solution playback, win/lose flow; a real **level-picker landing page**, an
-optional **SQLite backend** with **username accounts**, **leaderboards**, and
-per-attempt tracking feeding **puzzle-difficulty** and **player-skill** stats.
-Best scores also persist locally, so a brief server hiccup never blocks play.
-Deliberately left out for now: passwords/sessions, sound, timer and undo.
+optional **SQLite backend** with **username accounts** (plus additive
+**passkey / WebAuthn login**), **leaderboards**, and per-attempt tracking
+feeding **puzzle-difficulty** and **player-skill** stats. Best scores also
+persist locally, so a brief server hiccup never blocks play. Deliberately left
+out for now: passwords (usernames have none — passkeys are the secure login),
+sound, timer and undo.
 
 ## License
 
