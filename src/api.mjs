@@ -167,10 +167,6 @@ export async function adminReorderPuzzles(ids) {
   return request('PUT', '/admin/puzzles/order', { ids });
 }
 
-export async function adminUpdatePuzzle(id, data) {
-  return request('PATCH', `/admin/puzzles/${id}`, data);
-}
-
 // Run the full (BFS) + beam solvers for one puzzle server-side and store the
 // results. Returns { fullOptimal, beamMoves, solvedAt }.
 export async function adminSolvePuzzle(id) {

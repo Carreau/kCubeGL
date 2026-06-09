@@ -5,6 +5,10 @@
  * leaderboard bookkeeping, the difficulty / skill aggregates, and the admin
  * pin/order endpoints. Exits non-zero on the first failure.
  */
+// Set the admin-bootstrap secret before booting so we can mint an admin user.
+const ADMIN_TOKEN = "test-admin-secret";
+process.env.KCUBE_ADMIN_TOKEN = ADMIN_TOKEN;
+
 import { startServer } from "../server/server.mjs";
 
 let passed = 0;
@@ -48,14 +52,18 @@ try {
   eq(cat[0].yourBest, null, "yourBest null when unauth");
   const P0 = cat[0].name, P1 = cat[1].name, P2 = cat[2].name, P3 = cat[3].name;
 
-  // registration + case-insensitive uniqueness (alice is the first user → admin)
-  const a = await call("POST", "/users", { body: { username: "alice" } });
+  // registration + case-insensitive uniqueness. Admin is granted only with the
+  // bootstrap secret — there's no "first user wins" magic.
+  const a = await call("POST", "/users", { body: { username: "alice", adminToken: ADMIN_TOKEN } });
   eq(a.status, 201, "create alice → 201");
   ok(a.body.token, "alice got a token");
-  ok(a.body.isAdmin, "first user is admin");
+  ok(a.body.isAdmin, "alice presented the bootstrap secret → admin");
   const tokenA = a.body.token;
   eq((await call("POST", "/users", { body: { username: "Alice" } })).status, 409, "duplicate name → 409");
   eq((await call("POST", "/users", { body: { username: "  " } })).status, 400, "blank name → 400");
+  // A plain registration (no/incorrect secret) is never admin.
+  const plain = await call("POST", "/users", { body: { username: "carol", adminToken: "wrong" } });
+  ok(!plain.body.isAdmin, "wrong bootstrap secret → not admin");
 
   // identity
   eq((await call("GET", "/me", { token: tokenA })).body.username, "alice", "me = alice");

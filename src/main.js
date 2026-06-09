@@ -1,6 +1,10 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { mulberry32, shuffle, buildCatalog, catalogByName } from "./shared.mjs";
+import { buildCatalog, catalogByName } from "./shared.mjs";
+import {
+  generateLevel, quatToFaces, cellsConnected, OPPOSITE, NEI,
+  DIRS as GEN_DIRS, FACE_AXES as GEN_FACE_AXES,
+} from "./level-gen.mjs";
 import * as api from "./api.mjs";
 import { bfsSolve, greedySolve, ROLL_DR, ROLL_DC } from "./solver.mjs";
 
@@ -23,11 +27,7 @@ const HALF = S / 2;
 const ROLL_MS = 170; // duration of a roll animation
 const STORE_KEY = "kcube.v1"; // localStorage key for persisted scores
 
-/* DEBUG: show-solution instrumentation. While DEBUG_SOLVE is on, every auto-play
- * step is logged and any cursor island-jump (next cube unreachable from where the
- * cursor sits) is flagged with a copy-pasteable repro. Playback is also slowed so
- * a violation is easy to watch and capture. */
-const DEBUG_SOLVE = true;
+// Solution-playback pacing (slower than live play so each step is watchable).
 const SOLVE_ROLL_MS = 420; // roll duration while auto-solving (vs ROLL_MS)
 const SOLVE_STEP_MS = 380; // pause between solution moves
 const SOLVE_CURSOR_MS = 130; // per-cube step as the cursor walks between solution moves
@@ -42,66 +42,31 @@ const COLORS = [
   { name: "green", hex: 0x3ecf6b },
 ];
 
-// Fixed mapping from a cube's LOCAL face axis -> colour id. Every cube shares
-// this mapping; only orientation differs. The "solved" colour (identity
-// orientation, +Y up) is white.
-const FACE_AXES = [
-  { v: new THREE.Vector3(1, 0, 0), color: 2 }, // +X red
-  { v: new THREE.Vector3(-1, 0, 0), color: 3 }, // -X orange
-  { v: new THREE.Vector3(0, 1, 0), color: 0 }, // +Y white  (solved = up)
-  { v: new THREE.Vector3(0, -1, 0), color: 1 }, // -Y yellow
-  { v: new THREE.Vector3(0, 0, 1), color: 4 }, // +Z blue
-  { v: new THREE.Vector3(0, 0, -1), color: 5 }, // -Z green
-];
-// Arrow-key directions. dr/dc are board deltas; the pivot + rotation describe
-// the physical tip-over used both for the animation and the resulting
-// orientation. edgeOffset is added to the cube CENTRE to find the contact edge.
-const DIRS = {
-  ArrowRight: {
-    dr: 0, dc: 1,
-    axis: new THREE.Vector3(0, 0, 1), angle: -Math.PI / 2,
-    edgeOffset: new THREE.Vector3(HALF, -HALF, 0),
-  },
-  ArrowLeft: {
-    dr: 0, dc: -1,
-    axis: new THREE.Vector3(0, 0, 1), angle: Math.PI / 2,
-    edgeOffset: new THREE.Vector3(-HALF, -HALF, 0),
-  },
-  ArrowUp: {
-    dr: -1, dc: 0,
-    axis: new THREE.Vector3(1, 0, 0), angle: -Math.PI / 2,
-    edgeOffset: new THREE.Vector3(0, -HALF, -HALF),
-  },
-  ArrowDown: {
-    dr: 1, dc: 0,
-    axis: new THREE.Vector3(1, 0, 0), angle: Math.PI / 2,
-    edgeOffset: new THREE.Vector3(0, -HALF, HALF),
-  },
-};
+// Fixed mapping from a cube's LOCAL face axis -> colour id, lifted from the
+// shared generation tables (FACE_AXES order = BoxGeometry material order). Every
+// cube shares this mapping; only orientation differs.
+const FACE_AXES = GEN_FACE_AXES.map((f) => ({ v: new THREE.Vector3(...f.v), color: f.color }));
 
-// Reverse of each roll direction (used to undo a scramble for "show solution").
-const OPPOSITE = {
-  ArrowRight: "ArrowLeft", ArrowLeft: "ArrowRight",
-  ArrowUp: "ArrowDown", ArrowDown: "ArrowUp",
-};
+// Arrow-key directions for live play + animation. dr/dc and the rotation
+// (axis/angle) come from the shared generation tables so the physical tip-over
+// matches the orientation the generator produced; edgeOffset (the contact edge,
+// added to the cube CENTRE to find the pivot) is the only render-only extra.
+const DIRS = Object.fromEntries(Object.entries(GEN_DIRS).map(([k, d]) => [k, {
+  dr: d.dr, dc: d.dc,
+  axis: new THREE.Vector3(...d.axis), angle: d.angle,
+  edgeOffset: new THREE.Vector3(d.dc * HALF, -HALF, d.dr * HALF),
+}]));
 
 // Compact one-char code per arrow, used to record the player's cursor moves as a
-// replayable string (R/L/U/D) for debugging and backend storage.
+// replayable string (R/L/U/D) for backend storage.
 const KEY_CODE = {
   ArrowRight: "R", ArrowLeft: "L", ArrowUp: "U", ArrowDown: "D",
 };
 
-// 4-neighbourhood for connectivity / adjacency tests.
-const NEI = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-
 /* --- Helpers ---------------------------------------------------------------- */
 
-// Level generation draws ALL its randomness from `rng`, a per-level seeded PRNG
-// (set at the top of buildLevel) so level N is the SAME puzzle for every
-// player — a prerequisite for comparable best-scores and per-puzzle difficulty
-// stats. Outside generation it falls back to Math.random.
-let rng = Math.random;
-const rint = (n) => Math.floor(rng() * n);
+// Level generation lives in src/level-gen.mjs (the pure, shared source of truth
+// the server uses too); this file just renders what it produces. No PRNG here.
 const cellX = (col) => (col - (BOARD - 1) / 2) * S;
 const cellZ = (row) => (row - (BOARD - 1) / 2) * S;
 const inBounds = (r, c) => r >= 0 && r < BOARD && c >= 0 && c < BOARD;
@@ -144,23 +109,10 @@ const FACE_MATERIALS = FACE_AXES.map(
   })
 );
 
-// Which colour faces up for a given orientation quaternion.
-const _tmp = new THREE.Vector3();
+// Which colour faces up for a given orientation quaternion. quatToFaces returns
+// the [+X,-X,+Y,-Y,+Z,-Z] colour slots; index 2 is the +Y (top) face.
 function topColor(quat) {
-  let best = -Infinity, color = 0;
-  for (const f of FACE_AXES) {
-    _tmp.copy(f.v).applyQuaternion(quat);
-    if (_tmp.y > best) { best = _tmp.y; color = f.color; }
-  }
-  return color;
-}
-
-// Return a quaternion that rotates a cube so the face with `colorId` points up (+Y).
-function faceUpQuat(colorId) {
-  const face = FACE_AXES.find((f) => f.color === colorId);
-  const q = new THREE.Quaternion();
-  q.setFromUnitVectors(face.v, new THREE.Vector3(0, 1, 0));
-  return q;
+  return quatToFaces(quat.toArray())[2];
 }
 
 /* A lightly bevelled cube. RoundedBoxGeometry is single-material, so we rebuild
@@ -387,109 +339,19 @@ function cubeAt(row, col) {
   return game.cubes.find((c) => c.row === row && c.col === col) || null;
 }
 
-function occupied(row, col) {
-  return game.cubes.some((c) => c.row === row && c.col === col);
-}
-
-// Are the given [row,col] cells a single 4-connected (N/S/E/W) block?
-function cellsConnected(cells) {
-  if (cells.length <= 1) return true;
-  const set = new Set(cells.map(([r, c]) => r * BOARD + c));
-  const seen = new Set();
-  const stack = [cells[0]];
-  seen.add(cells[0][0] * BOARD + cells[0][1]);
-  while (stack.length) {
-    const [r, c] = stack.pop();
-    for (const [dr, dc] of NEI) {
-      const nr = r + dr, nc = c + dc;
-      // Bounds-check BEFORE encoding: r*BOARD+c with an off-board nc wraps onto a
-      // neighbouring row's cell (e.g. col -1 → previous row's col 4), which would
-      // falsely bridge two disjoint islands and accept a non-contiguous board.
-      if (!inBounds(nr, nc)) continue;
-      const k = nr * BOARD + nc;
-      if (set.has(k) && !seen.has(k)) { seen.add(k); stack.push([nr, nc]); }
-    }
-  }
-  return seen.size === set.size;
-}
-
+// Are the current cubes a single 4-connected (N/S/E/W) block? (cellsConnected
+// lives in level-gen.mjs, the shared source of truth.)
 function isContiguous() {
   return cellsConnected(game.cubes.map((c) => [c.row, c.col]));
 }
 
-// Grow a random 4-connected blob of n cells from the board centre. The solved
-// target must itself be contiguous, since the win condition now requires it.
-function connectedCells(n) {
-  const mid = Math.floor(BOARD / 2);
-  const inSet = new Set([mid * BOARD + mid]);
-  const chosen = [[mid, mid]];
-  const frontier = [];
-  const pushNei = (r, c) => {
-    for (const [dr, dc] of NEI) {
-      const nr = r + dr, nc = c + dc;
-      if (inBounds(nr, nc) && !inSet.has(nr * BOARD + nc)) frontier.push([nr, nc]);
-    }
-  };
-  pushNei(mid, mid);
-  while (chosen.length < n && frontier.length) {
-    const [r, c] = frontier.splice(rint(frontier.length), 1)[0];
-    const k = r * BOARD + c;
-    if (inSet.has(k)) continue;
-    inSet.add(k);
-    chosen.push([r, c]);
-    pushNei(r, c);
-  }
-  return chosen;
-}
-
 /* --- Level generation ------------------------------------------------------
- * Start from a solved board (all cubes identity-oriented => white up) placed in
- * a single contiguous block, then apply N random reverse-rolls. Islands are
- * allowed to form, but each roll moves a cube from the *current cursor's* island
- * (the cursor rides the cube it just rolled). Since the cursor can only travel
- * within one island, reversing this sequence yields a route the cursor can
- * actually walk back to the contiguous, uniform start => guaranteed
- * human-solvable. The recorded reverse sequence powers "show solution".
+ * The board itself is built by generateLevel() in src/level-gen.mjs: start from
+ * a solved board (all cubes the target colour up, in one contiguous block), then
+ * apply N random reverse-rolls, each from the current cursor's island so the
+ * reversed sequence is a route the cursor can actually walk back. buildLevel()
+ * below just renders that result and records the reverse as the solution.
  * ------------------------------------------------------------------------- */
-
-// The puzzle catalogue (cube count, scramble depth, par, name) lives in
-// src/shared.mjs so the server can seed the same puzzles without the game engine.
-
-function scrambleRoll(cube, forbidKey = null) {
-  // Pick a random direction whose target cell is on-board and empty, then roll.
-  // Islands are allowed — a cube may roll away from its neighbours, even sailing
-  // off alone. forbidKey (when set) is skipped so we never tip the same cube
-  // straight back the way it just came: that exact-opposite roll is a no-op that
-  // wastes a scramble step and shows up as a pointless there-and-back wobble in
-  // the solution playback. Returns the direction key used (so the scramble can be
-  // replayed), or null if the cube is boxed in.
-  const keys = shuffle(Object.keys(DIRS), rng);
-  for (const k of keys) {
-    if (k === forbidKey) continue;
-    const d = DIRS[k];
-    const nr = cube.row + d.dr, nc = cube.col + d.dc;
-    if (!inBounds(nr, nc) || occupied(nr, nc)) continue;
-    applyRollLogic(cube, d, nr, nc);
-    return k;
-  }
-  return null;
-}
-
-// All cubes 4-connected to `cube` (its island), including `cube` itself. The
-// player's cursor can only travel within one island, so the next scramble roll
-// must come from here.
-function islandOf(cube) {
-  const island = [cube];
-  const seen = new Set([cube]);
-  for (let i = 0; i < island.length; i++) {
-    const c = island[i];
-    for (const [dr, dc] of NEI) {
-      const n = cubeAt(c.row + dr, c.col + dc);
-      if (n && !seen.has(n)) { seen.add(n); island.push(n); }
-    }
-  }
-  return island;
-}
 
 // Shortest route of cubes from `from` to `to`, stepping only between cubes that
 // are 4-neighbours (the moves a cursor can make). BFS over the island graph;
@@ -514,116 +376,47 @@ function cursorPath(from, to) {
   return path.reverse();
 }
 
-// Apply a roll to logical + mesh state instantly (no animation).
-function applyRollLogic(cube, dir, nr, nc) {
-  const q = new THREE.Quaternion().setFromAxisAngle(dir.axis, dir.angle);
-  cube.mesh.quaternion.premultiply(q);
-  cube.setCell(nr, nc);
-  cube.syncMesh();
-}
-
 function buildLevel(config) {
-  // Seed all randomness from the puzzle's seed so this exact board is reproduced
-  // identically on every device — the basis for fair leaderboards. The config
-  // comes from the server, with the deterministic catalogue as a cold-start cache
-  // when it's briefly unreachable.
-  rng = mulberry32(config.seed);
+  // Generate the scrambled board from the puzzle's seed (pure, shared with the
+  // server, so it's the identical board on every device). config comes from the
+  // server, with the deterministic catalogue as a cold-start cache when it's
+  // briefly unreachable.
+  const gen = generateLevel(config);
+  game.targetColor = gen.targetColor;
 
-  // Pick which face color is "solved" for this puzzle, and set the initial cube
-  // orientation before scrambling. Drawn from the puzzle's seeded RNG so the
-  // choice is stable for every player.
-  const targetColorId = rint(COLORS.length);
-  game.targetColor = targetColorId;
-
-  // clear old cubes
+  // Render the generated state: a cube per cell, oriented by the quaternion the
+  // generator produced (lifted from a plain [x,y,z,w] array into THREE here).
   for (const c of game.cubes) c.dispose();
-  game.cubes = [];
+  game.cubes = gen.cubes.map((g) => {
+    const cube = new Cube(g.row, g.col);
+    cube.mesh.quaternion.fromArray(g.quat);
+    return cube;
+  });
 
-  const { numCubes, scramble } = config;
-
-  // place cubes as a single contiguous block, solved orientation
-  for (const [r, c] of connectedCells(numCubes)) game.cubes.push(new Cube(r, c));
-
-  // Orient each cube so targetColorId faces up, plus a per-cube random Y-axis spin
-  // (0°/90°/180°/270°) so side faces vary even when the top color is fixed.
-  const baseQ = faceUpQuat(targetColorId);
-  const _yAxis = new THREE.Vector3(0, 1, 0);
-  for (const cube of game.cubes) {
-    const yQ = new THREE.Quaternion().setFromAxisAngle(_yAxis, rint(4) * (Math.PI / 2));
-    cube.mesh.quaternion.copy(baseQ).premultiply(yQ);
-  }
-
-  // Scramble with random reverse-rolls, recording each so the exact reverse can
-  // be replayed as the solution. The cursor can only hop between cubes sharing an
-  // island, so each roll must move a cube from the *current* cursor cube's island
-  // (the cursor follows whichever cube was just rolled). A lone cube forms its own
-  // island and can sail across the board, ferrying the cursor to a new cluster.
-  // Honouring this at scramble time guarantees the reversed sequence is a route a
-  // human cursor can actually walk.
-  const scrambleMoves = [];
-  let cursorCube = game.cubes[0];
-  let applied = 0, guard = 0;
-  while (applied < scramble && guard < scramble * 40) {
-    guard++;
-    // Try cubes from the cursor's island, in random order, until one can roll.
-    const island = shuffle(islandOf(cursorCube), rng);
-    const prev = scrambleMoves[scrambleMoves.length - 1];
-    let rolled = null;
-    for (const cube of island) {
-      // Re-rolling the cube we just moved, in the opposite direction, would undo
-      // the previous step — forbid that one direction so the scramble keeps
-      // making progress (and the reversed solution has no there-and-back pairs).
-      const forbid = prev && prev.cube === cube ? OPPOSITE[prev.key] : null;
-      const k = scrambleRoll(cube, forbid);
-      if (k) { rolled = { cube, key: k }; break; }
-    }
-    if (!rolled) continue; // island fully boxed in (rare) — retry, guard bounds it
-    scrambleMoves.push(rolled);
-    cursorCube = rolled.cube; // cursor rides along with the cube it just rolled
-    applied++;
-  }
-
-  // If by luck the scramble produced an already-solved board, nudge once more
-  // from the current cursor's island so the extra move stays cursor-reachable.
-  if (isSolved()) {
-    const prev = scrambleMoves[scrambleMoves.length - 1];
-    for (const cube of shuffle(islandOf(cursorCube), rng)) {
-      const forbid = prev && prev.cube === cube ? OPPOSITE[prev.key] : null;
-      const k = scrambleRoll(cube, forbid);
-      if (k) { scrambleMoves.push({ cube, key: k }); break; }
-    }
-  }
-
-  // Solution = scramble reversed, each roll undone in the opposite direction.
-  // This walks the board back through the same states to the contiguous,
-  // uniform start, so it satisfies the win condition.
-  game.solution = scrambleMoves
+  // Solution = scramble reversed, each roll undone in the opposite direction —
+  // a route back through the same states to the contiguous, uniform start.
+  game.solution = gen.scramble
     .slice().reverse()
-    .map(({ cube, key }) => ({ cube, key: OPPOSITE[key] }));
+    .map(({ cubeIndex, key }) => ({ cube: game.cubes[cubeIndex], key: OPPOSITE[key] }));
 
-  // Snapshot the scrambled start so "show solution" can replay from here.
+  // Snapshot the scrambled start so "show solution" / Retry can replay from here.
   game.initial = game.cubes.map((c) => ({
     cube: c, row: c.row, col: c.col, quat: c.mesh.quaternion.clone(),
   }));
 
-  // Move budget. Each scramble roll stayed inside the cursor's island, so the
-  // reversed sequence is a route the cursor can actually walk and the board is
-  // solvable in `scramble` rolls (cursor hops within an island are free). Par
-  // stays generously above that raw count to leave room for exploratory play.
-  // `par` is the bonus-free budget (what the backend stores as the level's par);
-  // `optimal` is the shortest known solve for this exact board (its solution
-  // length) — both reported to the server to seed level metadata.
+  // Move budget. `par` is the bonus-free budget (the level's par, reported to the
+  // backend); `optimal` is the shortest known solve for this board (its solution
+  // length). Par stays generously above the raw scramble count to leave room for
+  // exploratory play (cursor hops within an island are free).
   game.par = config.par;
   game.optimal = game.solution.length;
   game.moves = game.par + game.bonus;
   game.startMoves = game.moves; // remember the budget so Retry can restore it
   game.movesUsed = 0;
   game.userMoves = []; // fresh board ⇒ fresh recording of the player's cursor path
-  // Start the cursor on the first cube of the solution (the last-scrambled cube)
-  // so par is reachable from the opening position, not just by "show solution".
-  game.selected = game.solution.length
-    ? game.cubes.indexOf(game.solution[0].cube)
-    : 0;
+  // Start the cursor on the last-scrambled cube (solution[0].cube) so par is
+  // reachable from the opening position, not just by "show solution".
+  game.selected = gen.cursorIndex;
   game.solving = false;
   game.solveQueue = [];
   game.walk = null;
@@ -746,12 +539,6 @@ function afterMove() {
   if (isSolved()) {
     game.state = "won";
     game.bonus += 1; // clearing a puzzle grants +1 carried move
-    if (DEBUG_SOLVE) {
-      console.log(
-        `[solve] player cleared ${game.puzzleName} in ${game.movesUsed} moves · ` +
-        `cursor path (${game.userMoves.length} keys): ${game.userMoves.join("") || "(none)"}`
-      );
-    }
     finalizeAttempt("won"); // close the attempt as a win (records moves + time + path)
     const { isRecord, best, prev } = recordScore(game.puzzleName, game.movesUsed);
     const scoreLine = isRecord
@@ -779,28 +566,9 @@ function afterMove() {
 
 /* --- Show solution ---------------------------------------------------------- */
 
-// Convert a THREE.Quaternion to a solver face array [+X,-X,+Y,-Y,+Z,-Z].
-// Each slot stores the colour id of the face that currently points in that
-// world direction. faces[2] is the top colour (used as the win criterion).
-const _solverTmp = new THREE.Vector3();
-const _solverDirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
-function quatToFaces(quat) {
-  const faces = new Array(6);
-  for (const fa of FACE_AXES) {
-    _solverTmp.copy(fa.v).applyQuaternion(quat);
-    let best = 0, bestDot = -Infinity;
-    for (let i = 0; i < 6; i++) {
-      const [dx, dy, dz] = _solverDirs[i];
-      const dot = _solverTmp.x * dx + _solverTmp.y * dy + _solverTmp.z * dz;
-      if (dot > bestDot) { bestDot = dot; best = i; }
-    }
-    faces[best] = fa.color;
-  }
-  return faces;
-}
-
 // Build the pure solver state from the stored initial snapshot so the solver
 // always starts from the scrambled board regardless of what the player has done.
+// quatToFaces (from level-gen) takes a plain [x,y,z,w] array; faces[2] is the top.
 function extractInitialSolverState() {
   const firstCube = game.solution.length ? game.solution[0].cube : game.cubes[0];
   const cursorId = game.cubes.indexOf(firstCube);
@@ -809,7 +577,7 @@ function extractInitialSolverState() {
       id: i,
       r: snap.row,
       c: snap.col,
-      faces: quatToFaces(snap.quat),
+      faces: quatToFaces(snap.quat.toArray()),
     })),
     cursorId,
   };
@@ -829,16 +597,12 @@ function tryImproveWithSolver() {
 
   const bfs = bfsSolve(solverState);
   if (bfs && bfs.length <= game.solution.length) {
-    if (DEBUG_SOLVE)
-      console.log(`[solver] BFS: ${bfs.length} rolls (stored ${game.solution.length})`);
     game.solution = solverSolutionToGame(bfs);
     return;
   }
 
   const greedy = greedySolve(solverState);
   if (greedy && greedy.length < game.solution.length) {
-    if (DEBUG_SOLVE)
-      console.log(`[solver] greedy: ${greedy.length} rolls (stored ${game.solution.length})`);
     game.solution = solverSolutionToGame(greedy);
   }
 }
@@ -866,29 +630,7 @@ function showSolution() {
   game.selected = game.cubes.indexOf(game.solveQueue[0].cube);
   updateCursor(true);
   updateHud();
-  if (DEBUG_SOLVE) logSolveStart();
   solutionStep();
-}
-
-// DEBUG: the t=0 picture — where the cursor begins, which cube the first move
-// rolls, whether that cube is reachable from the cursor, and how the scrambled
-// board splits into islands. (Starting the cursor on the first solution cube
-// makes this trivially reachable; logging it makes the invariant observable.)
-function logSolveStart() {
-  const start = game.cubes[game.selected];
-  const first = game.solveQueue[0].cube;
-  const seen = new Set();
-  const islands = [];
-  for (const c of game.cubes) {
-    if (seen.has(c)) continue;
-    const isl = islandOf(c);
-    isl.forEach((k) => seen.add(k));
-    islands.push(isl.map((k) => `(${k.row},${k.col})`).join(""));
-  }
-  console.log(
-    `[solve] t=0: cursor@(${start.row},${start.col}) · first move rolls @(${first.row},${first.col}) · ` +
-    `reachable=${islandOf(start).includes(first)} · ${islands.length} island(s): ${islands.join(" | ")}`
-  );
 }
 
 function solutionStep() {
@@ -906,28 +648,6 @@ function solutionStep() {
   const { cube, key } = game.solveQueue.shift();
   const from = game.cubes[game.selected];
 
-  // DEBUG: a human cursor can only travel within one island, so each solution
-  // move must roll a cube that shares an island with the cube the cursor is
-  // resting on (where the previous move left it). Log every step, and shout +
-  // dump a repro if one ever jumps to a cube in a disconnected island.
-  if (DEBUG_SOLVE) {
-    const island = islandOf(from);
-    const reachable = island.includes(cube);
-    const step = game.solution.length - game.solveQueue.length;
-    (reachable ? console.log : console.error)(
-      `[solve] step ${step}/${game.solution.length}: ` +
-      `cursor@(${from.row},${from.col}) → roll @(${cube.row},${cube.col}) ${key} · ` +
-      `same island=${reachable} (island ${island.length}/${game.cubes.length} cubes)`
-    );
-    if (!reachable) {
-      console.error(
-        "[solve] ⛔ VIOLATION: the next cube is in a DIFFERENT island — a cursor " +
-        "cannot reach it. Copy the repro below and send it back."
-      );
-      dumpRepro();
-    }
-  }
-
   // The cursor rides the cube it rolls, so it must first travel to that cube.
   // Walk it there cube-by-cube along the island instead of teleporting; once it
   // arrives, perform the actual roll.
@@ -940,14 +660,6 @@ function solutionStep() {
   const path = cursorPath(from, cube);
   if (path && path.length > 1) startCursorWalk(path, roll);
   else roll();
-}
-
-// DEBUG: everything needed to replay a level offline — each cube's scrambled
-// start cell and the full solution as [cubeIndex, directionKey] pairs.
-function dumpRepro() {
-  const starts = game.cubes.map((c, i) => [game.initial[i].row, game.initial[i].col]);
-  const solution = game.solution.map((m) => [game.cubes.indexOf(m.cube), m.key]);
-  console.error("[solve] REPRO " + JSON.stringify({ puzzle: game.puzzleName, starts, solution }));
 }
 
 /* --- Presentation: cursor + HUD -------------------------------------------- */

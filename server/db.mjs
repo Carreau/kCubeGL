@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS passkeys (
 
 CREATE TABLE IF NOT EXISTS webauthn_challenges (
   challenge   TEXT PRIMARY KEY,
-  user_id     INTEGER,
+  user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
   expires_at  INTEGER NOT NULL
 );
 
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS puzzles (
 
 CREATE TABLE IF NOT EXISTS attempts (
   id          INTEGER PRIMARY KEY,
-  user_id     INTEGER NOT NULL REFERENCES users(id),
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   puzzle_id   INTEGER NOT NULL REFERENCES puzzles(id),
   outcome     TEXT NOT NULL DEFAULT 'in_progress', -- in_progress|won|lost|abandoned
   moves_used  INTEGER,
@@ -88,13 +88,12 @@ CREATE INDEX IF NOT EXISTS idx_attempts_won         ON attempts(puzzle_id, outco
 
 const now = () => Date.now();
 
-// Add a column if it isn't already present (node:sqlite throws on a duplicate
-// ALTER, so we probe the table schema first). Lets older DBs gain new columns.
-function ensureColumn(db, table, column, def) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
-  }
+// A "this id doesn't exist" error the routing layer can map to 404, distinct
+// from an unexpected failure (which should surface as a 500).
+function notFound(id) {
+  const err = new Error(`puzzle ${id} not found`);
+  err.code = "NOT_FOUND";
+  return err;
 }
 
 export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
@@ -102,11 +101,6 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
-  // Migrations for DBs created before these columns existed.
-  ensureColumn(db, "puzzles", "full_optimal", "INTEGER");
-  ensureColumn(db, "puzzles", "beam_moves", "INTEGER");
-  ensureColumn(db, "puzzles", "min_beam_width", "INTEGER");
-  ensureColumn(db, "puzzles", "solved_at", "INTEGER");
   const wrapped = new Db(db);
   wrapped.seedCatalog();
   return wrapped;
@@ -120,11 +114,11 @@ export class Db {
 
   // Register a username, returning { id, username, token, isAdmin }. Throws an
   // Error with .code === "DUP" if the name (case-insensitively) is taken.
-  // The very first user created automatically becomes admin.
-  createUser(username) {
+  // Admin is granted only when the caller proves the bootstrap secret
+  // (KCUBE_ADMIN_TOKEN) — see the POST /api/users route. Never "first user wins".
+  createUser(username, { admin = false } = {}) {
     const token = randomBytes(24).toString("base64url");
-    const isFirst = this.db.prepare("SELECT COUNT(*) AS n FROM users").get().n === 0;
-    const isAdmin = isFirst ? 1 : 0;
+    const isAdmin = admin ? 1 : 0;
     try {
       const r = this.db
         .prepare("INSERT INTO users (username, username_lower, token, created_at, is_admin) VALUES (?, ?, ?, ?, ?)")
@@ -170,20 +164,11 @@ export class Db {
     this.db.prepare("UPDATE passkeys SET counter = ? WHERE credential_id = ?").run(counter, credentialId);
   }
 
-  getUserPasskeys(userId) {
-    return this.db.prepare(
-      "SELECT credential_id, created_at FROM passkeys WHERE user_id = ? ORDER BY created_at DESC"
-    ).all(userId);
-  }
-
-  deletePasskey(credentialId, userId) {
-    const r = this.db.prepare("DELETE FROM passkeys WHERE credential_id = ? AND user_id = ?").run(credentialId, userId);
-    return r.changes > 0;
-  }
-
   /* --- webauthn challenges ---------------------------------------------------- */
 
   saveChallenge(challenge, userId = null) {
+    // Opportunistically sweep expired challenges so abandoned ones don't pile up.
+    this.db.prepare("DELETE FROM webauthn_challenges WHERE expires_at < ?").run(Date.now());
     const expiresAt = Date.now() + 5 * 60 * 1000;
     this.db.prepare(
       "INSERT OR REPLACE INTO webauthn_challenges (challenge, user_id, expires_at) VALUES (?, ?, ?)"
@@ -278,7 +263,7 @@ export class Db {
   // the smallest beam width that solves the board (1 ≈ no planning needed).
   solvePuzzle(puzzleId) {
     const row = this.puzzleById(puzzleId);
-    if (!row) throw new Error(`puzzle ${puzzleId} not found`);
+    if (!row) throw notFound(puzzleId);
     const r = solveCatalogPuzzle({
       seed: row.seed, numCubes: row.num_cubes, scramble: row.scramble,
     });
@@ -297,7 +282,7 @@ export class Db {
   // Pin / unpin a puzzle and optionally set its position among pinned puzzles.
   setPuzzleOrder(puzzleId, { pinned, sortOrder } = {}) {
     const row = this.puzzleById(puzzleId);
-    if (!row) throw new Error(`puzzle ${puzzleId} not found`);
+    if (!row) throw notFound(puzzleId);
     const p = pinned == null ? row.pinned : (pinned ? 1 : 0);
     const so = sortOrder == null ? row.sort_order : sortOrder;
     this.db.prepare("UPDATE puzzles SET pinned = ?, sort_order = ? WHERE id = ?").run(p, so, puzzleId);
@@ -329,6 +314,13 @@ export class Db {
     return Number(r.lastInsertRowid);
   }
 
+  // The caller's own still-open attempt, or null. Keeps raw SQL in the data layer.
+  openAttempt(id, userId) {
+    return this.db
+      .prepare("SELECT id, puzzle_id FROM attempts WHERE id = ? AND user_id = ? AND outcome = 'in_progress'")
+      .get(id, userId) || null;
+  }
+
   // Finalise the caller's own in-progress attempt. Returns true if a row was
   // updated (false if it wasn't theirs / already closed).
   finishAttempt(id, userId, { outcome, movesUsed, durationMs, moveSeq }) {
@@ -353,13 +345,6 @@ export class Db {
       .prepare("SELECT MIN(moves_used) AS best FROM attempts WHERE puzzle_id = ? AND outcome = 'won'")
       .get(puzzleId);
     return r && r.best != null ? r.best : null;
-  }
-
-  solverCount(puzzleId) {
-    const r = this.db
-      .prepare("SELECT COUNT(DISTINCT user_id) AS n FROM attempts WHERE puzzle_id = ? AND outcome = 'won'")
-      .get(puzzleId);
-    return r ? r.n : 0;
   }
 
   /* --- aggregates: leaderboard, puzzle difficulty, player skill ------------ */
