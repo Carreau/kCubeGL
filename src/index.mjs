@@ -80,6 +80,7 @@ function renderAccount() {
     box.innerHTML =
       `<span class="who-pill">${avatar(state.user)}@${esc(state.user.username)}</span>` +
       (state.user.isAdmin ? `<a href="admin.html" class="link-btn">Admin</a>` : '') +
+      `<a href="settings.html" class="link-btn">Settings</a>` +
       `<button id="signout" class="link-btn" type="button">Sign out</button>`;
     $("signout").addEventListener("click", () => { api.clearToken(); boot(); });
     return;

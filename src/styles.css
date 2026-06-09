@@ -688,3 +688,26 @@ body.auth-page {
 /* Unsaved-state indicators. */
 .unsaved-badge { color: #ffd23f; font-size: 12px; font-weight: 600; }
 .unsaved-dot { color: #ffd23f; }
+
+/* Settings page */
+.settings-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.settings-avatar {
+  border-radius: 50%;
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.06);
+}
+.settings-avatar-name { font-size: 16px; color: var(--muted); }
+.settings-section h2 { margin: 0 0 8px; font-size: 15px; letter-spacing: 0.4px; }
+.settings-note { margin: 0 0 20px; font-size: 13px; line-height: 1.6; }
+.settings-note strong { color: var(--ink); }
+.settings-actions { display: flex; align-items: center; gap: 16px; margin-top: 4px; }
+.settings-actions .primary { padding: 10px 24px; }
+.accent-link { color: var(--accent); text-decoration: none; }
+.accent-link:hover { text-decoration: underline; }
