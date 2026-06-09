@@ -323,13 +323,25 @@ body.landing-page {
 
 .account { display: flex; align-items: center; gap: 10px; }
 .who-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   background: rgba(110, 231, 255, 0.12);
   border: 1px solid rgba(110, 231, 255, 0.3);
   color: var(--accent);
   border-radius: 999px;
-  padding: 5px 14px;
+  padding: 5px 14px 5px 6px;
   font-size: 13px;
 }
+
+/* Gravatar avatar shown beside a username (account pill, leaderboard rows). */
+.avatar {
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  vertical-align: middle;
+  object-fit: cover;
+}
+table.lb .avatar { margin-right: 6px; }
 .who-pill.offline-pill {
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(255, 255, 255, 0.14);

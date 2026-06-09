@@ -14,7 +14,7 @@
  * ========================================================================== */
 
 import * as api from "./api.mjs";
-import { buildCatalog } from "./shared.mjs";
+import { buildCatalog, gravatarUrl } from "./shared.mjs";
 
 const LOCAL_KEY = "kcube.v1"; // same store the game writes best scores to
 
@@ -37,6 +37,15 @@ function readLocalBest() {
 }
 
 const dash = (v) => (v == null ? "–" : v);
+
+// A small Gravatar avatar <img> for a username (or email). `d=retro` gives every
+// player a stable generated icon even without a Gravatar account; onerror hides
+// it so a broken image never leaves a gap.
+function avatar(identifier, size = 18) {
+  const src = gravatarUrl(identifier, { size: size * 2 }); // 2× for crisp HiDPI
+  return `<img class="avatar" src="${esc(src)}" alt="" width="${size}" height="${size}" ` +
+    `loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`;
+}
 
 function fmtMs(ms) {
   if (ms == null) return "–";
@@ -64,7 +73,7 @@ function renderAccount() {
   }
   if (state.user) {
     box.innerHTML =
-      `<span class="who-pill">@${esc(state.user.username)}</span>` +
+      `<span class="who-pill">${avatar(state.user.username)}@${esc(state.user.username)}</span>` +
       (state.user.isAdmin ? `<a href="admin.html" class="link-btn">Admin</a>` : '') +
       `<button id="signout" class="link-btn" type="button">Sign out</button>`;
     $("signout").addEventListener("click", () => { api.clearToken(); boot(); });
@@ -227,7 +236,7 @@ async function openDetail(name) {
   const st = info.stats || {};
   const rows = (info.leaderboard || []).map((r, i) =>
     `<tr${r.you ? ' class="me"' : ""}>` +
-    `<td>${i + 1}</td><td>@${esc(r.username)}</td>` +
+    `<td>${i + 1}</td><td>${avatar(r.username)}@${esc(r.username)}</td>` +
     `<td>${r.best}</td><td>${fmtMs(r.durationMs)}</td><td>${dash(r.attempts)}</td></tr>`
   ).join("");
 
