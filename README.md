@@ -20,7 +20,7 @@ the built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html) module, so ther
 is **no native dependency and no `npm install`** for the server itself. The
 database file (`server/kcube.sqlite`) is created on first run.
 
-Then open <http://localhost:8080>, pick a level, and play.
+Then open <http://localhost:8080>, pick a puzzle, and play.
 
 ### Without the backend
 
@@ -37,14 +37,18 @@ python3 -m http.server 8080
 Three.js is loaded from a CDN at runtime (in your browser), so no build step is
 required either way.
 
-## Levels, accounts & leaderboards
+## Puzzles, accounts & leaderboards
 
-- **`index.html` is a real level picker** — a grid of levels showing your best,
-  the world best, and how many players have solved each. Click a card to play
-  (`play.html?level=N`); each level has a shareable URL.
-- **Every level is the same puzzle for everyone.** Level generation is seeded
-  from the level number, so level 5 is an identical board on every device —
-  which makes the best score a genuine record.
+- **`index.html` is the puzzle catalogue** — a grid of named puzzles showing your
+  best, the world best, and how many players have solved each. You can **sort by
+  difficulty** (failure rate, world-best moves over scramble length, cube count,
+  name). Click a card to play (`play.html?puzzle=<name>`); each puzzle has a
+  shareable URL.
+- **A fixed, named pool — no level numbers.** Puzzles are a catalogue of ~40
+  randomly-named boards (e.g. `ochre-bramble`) with varied cube counts and
+  scramble depths, all derived from one master seed — so a given puzzle is an
+  identical board on every device, which makes the best score a genuine record.
+  Admins can pin/order which puzzles are featured first.
 - **Sign in with a name** (no password) to land on the leaderboards. The server
   records every *attempt* — won, lost or abandoned — with its move count and
   duration. From those rows it derives per-puzzle **difficulty** (win rate, avg
@@ -63,32 +67,35 @@ required either way.
 - **Q / E** — rotate the board view around the vertical axis.
 - **S** — show a solution (replays a guaranteed solve from the start; then
   retry to try it yourself).
-- **R** — retry the current level (fresh scramble).
-- **M** / **Levels** — open the level picker.
-- **Enter / Space** — dismiss a panel / advance to the next level.
+- **R** — retry the current puzzle (same scrambled start).
+- **M** / **Puzzles** — open the puzzle catalogue.
+- **Enter / Space** — dismiss a panel / advance to the next puzzle.
 
 ### Win & economy
 
-- A level is solved when **all cubes show the same colour face-up** *and* they
+- A puzzle is solved when **all cubes show the same colour face-up** *and* they
   form a **single connected block** (every cube touching another N/S/E/W).
-- Each level has a **fixed move budget**. Run out before solving → retry.
-- **Clearing a level grants +1 move**, carried into later levels — so efficient
+- Each puzzle has a **fixed move budget**. Run out before solving → retry.
+- **Clearing a puzzle grants +1 move**, carried into later puzzles — so efficient
   solving compounds across a run.
-- **Best scores** (fewest moves to clear each level) are saved in your browser.
-  Pick any level you've reached from the **Levels** menu to **replay** it and
-  beat your record.
+- **Best scores** (fewest moves to clear each puzzle) are saved in your browser.
+  Pick any puzzle from the **Puzzles** catalogue to **replay** it and beat your
+  record.
 
 ## How it works
 
-- **Guaranteed-solvable levels:** every level starts from a *solved* board —
-  cubes placed in one **contiguous block**, all white up — and is scrambled with
-  random *reverse-rolls*. Reversing that exact sequence both matches the colours
-  and returns the cubes to their connected start, so no level is ever
+- **Guaranteed-solvable puzzles:** every puzzle starts from a *solved* board —
+  cubes placed in one **contiguous block**, all one colour up — and is scrambled
+  with random *reverse-rolls*. Reversing that exact sequence both matches the
+  colours and returns the cubes to their connected start, so no puzzle is ever
   impossible. That reverse sequence is also what **Show solution** plays back.
+- **A fixed catalogue, not a difficulty ramp:** the ~40 puzzles draw their cube
+  count and scramble depth independently and within bounded ranges (more cubes
+  isn't obviously harder), rather than auto-creating ever-bigger boards.
 - **Par accounts for herding:** because the cursor can't jump between disjoint
   clusters, scattered cubes must be rolled back together to win. The move budget
   is therefore set well above the raw scramble length (it scales with the cube
-  count) so a level stays beatable by hand.
+  count) so a puzzle stays beatable by hand.
 - **True 3D rolling:** a roll rotates the cube 90° about its leading bottom
   edge. Because the cell spacing equals the cube size, the cube lands exactly on
   the next cell. The face shown on top is read back from the cube's orientation
@@ -97,13 +104,15 @@ required either way.
 ## Project layout
 
 ```
-index.html         landing page: level grid, sign-in, leaderboards
+index.html         landing page: puzzle catalogue + difficulty sort, leaderboards
 play.html          the game page (import map for Three.js) + HUD/overlay
-src/index.mjs      landing-page logic (grid, account, per-level detail)
-src/main.js        game logic, level generation, rendering and roll animation
+admin.html         admin page: user management + featured-puzzle pin/order
+src/index.mjs      landing-page logic (catalogue grid, sorting, account, detail)
+src/admin.mjs      admin-page logic (users + puzzle pin/order)
+src/main.js        game logic, board generation, rendering and roll animation
 src/api.mjs        offline-safe browser client for the backend API
-src/shared.mjs     dependency-free level math shared by game + server
-src/styles.css     HUD, landing page and overlay styling
+src/shared.mjs     dependency-free puzzle catalogue + math shared by game + server
+src/styles.css     HUD, landing page, admin and overlay styling
 server/server.mjs  HTTP server: static files + JSON API (node:http)
 server/db.mjs      SQLite data layer + analytics queries (node:sqlite)
 test/api.mjs       backend API integration test (no browser)
@@ -113,7 +122,7 @@ test/smoke.mjs     end-to-end smoke test (Playwright, headless browser)
 ## Scope
 
 Implemented: 5×5 board, bevelled dice, arrow-key cursor & rolling, animated
-tip-over, **deterministic** solvable level generation, contiguous-block win
+tip-over, **deterministic** solvable puzzle generation, contiguous-block win
 condition, herding-aware move budget, carried bonus, Q/E view rotation,
 show-solution playback, win/lose flow; a real **level-picker landing page**, an
 optional **SQLite backend** with **username accounts**, **leaderboards**, and

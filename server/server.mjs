@@ -71,7 +71,12 @@ const toInt = (v) => {
   const n = Number(v);
   return Number.isInteger(n) ? n : null;
 };
-const clampLevel = (n) => (Number.isInteger(n) && n >= 1 && n <= 10000 ? n : null);
+// Puzzle names are the public key: lowercase words/digits joined by hyphens.
+const cleanName = (v) => {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  return /^[a-z0-9-]{1,64}$/.test(s) ? s : null;
+};
 const VALID_OUTCOME = new Set(["won", "lost", "abandoned"]);
 
 function getOrigin(req) {
@@ -162,47 +167,44 @@ async function handleApi(req, res, url, db) {
     return sendJson(res, 200, db.userStats(u.id));
   }
 
-  // GET /api/levels?count=N   (auth optional — adds yourBest)
-  if (method === "GET" && parts[1] === "levels" && parts.length === 2) {
-    const count = Math.max(1, Math.min(60, toInt(searchParams.get("count")) || 12));
+  // GET /api/puzzles   (auth optional — adds yourBest). The whole catalogue.
+  if (method === "GET" && parts[1] === "puzzles" && parts.length === 2) {
     const u = user();
-    return sendJson(res, 200, db.listLevels(u ? u.id : null, count));
+    return sendJson(res, 200, db.listPuzzles(u ? u.id : null));
   }
 
-  // GET /api/levels/:level   (auth optional)
-  if (method === "GET" && parts[1] === "levels" && parts.length === 3) {
-    const level = clampLevel(toInt(parts[2]));
-    if (!level) return sendJson(res, 400, { error: "bad level" });
+  // GET /api/puzzles/:name   (auth optional)
+  if (method === "GET" && parts[1] === "puzzles" && parts.length === 3) {
+    const name = cleanName(parts[2]);
+    if (!name) return sendJson(res, 400, { error: "bad puzzle" });
+    const meta = db.puzzleMeta(name);
+    if (!meta) return sendJson(res, 404, { error: "no such puzzle" });
     const u = user();
-    const meta = db.levelMeta(level);
     return sendJson(res, 200, {
       ...meta,
-      worldBest: db.worldBest(level),
-      yourBest: u ? db.userBest(u.id, level) : null,
-      leaderboard: db.leaderboard(level, 10).map((r) => ({
+      worldBest: db.worldBest(meta.id),
+      yourBest: u ? db.userBest(u.id, meta.id) : null,
+      leaderboard: db.leaderboard(meta.id, 10).map((r) => ({
         username: r.username,
         best: r.best,
         durationMs: r.durationMs,
         attempts: r.attempts,
         you: u ? r.user_id === u.id : false,
       })),
-      stats: db.levelStats(level),
+      stats: db.puzzleStats(meta.id),
     });
   }
 
-  // POST /api/attempts  { level, numCubes, par, optimal }
+  // POST /api/attempts  { puzzle, optimal }
   if (method === "POST" && parts[1] === "attempts" && parts.length === 2) {
     const u = requireUser(); if (!u) return;
     const body = await readJson(req);
-    const level = clampLevel(toInt(body.level));
-    if (!level) return sendJson(res, 400, { error: "bad level" });
-    db.ensureLevel(level, {
-      numCubes: toInt(body.numCubes) ?? undefined,
-      par: toInt(body.par) ?? undefined,
-      optimal: toInt(body.optimal) ?? undefined,
-    });
-    const { puzzleId } = db.levelMeta(level);
-    return sendJson(res, 201, { attemptId: db.startAttempt(u.id, level, puzzleId) });
+    const name = cleanName(body.puzzle);
+    if (!name) return sendJson(res, 400, { error: "bad puzzle" });
+    const puzzle = db.puzzleByName(name);
+    if (!puzzle) return sendJson(res, 404, { error: "no such puzzle" });
+    db.recordOptimal(puzzle.id, toInt(body.optimal) ?? undefined);
+    return sendJson(res, 201, { attemptId: db.startAttempt(u.id, puzzle.id) });
   }
 
   // PATCH /api/attempts/:id  { outcome, movesUsed, durationMs }
@@ -213,12 +215,12 @@ async function handleApi(req, res, url, db) {
     if (!id || !VALID_OUTCOME.has(body.outcome)) {
       return sendJson(res, 400, { error: "bad attempt update" });
     }
-    // Find the attempt's level (and confirm it's the caller's own open attempt).
+    // Find the attempt's puzzle (and confirm it's the caller's own open attempt).
     const row = db.db
-      .prepare("SELECT level FROM attempts WHERE id = ? AND user_id = ? AND outcome = 'in_progress'")
+      .prepare("SELECT puzzle_id FROM attempts WHERE id = ? AND user_id = ? AND outcome = 'in_progress'")
       .get(id, u.id);
     if (!row) return sendJson(res, 404, { error: "no such open attempt" });
-    const level = row.level;
+    const puzzleId = row.puzzle_id;
     const movesUsed = Math.max(0, toInt(body.movesUsed) ?? 0);
     const durationMs = Math.max(0, toInt(body.durationMs) ?? 0);
     // Player's recorded cursor path (R/L/U/D). Keep only the four codes and cap
@@ -226,11 +228,11 @@ async function handleApi(req, res, url, db) {
     const moveSeq = typeof body.moveSeq === "string"
       ? body.moveSeq.replace(/[^RLUD]/g, "").slice(0, 4096) || null
       : null;
-    const prevBest = db.userBest(u.id, level); // before recording this outcome
+    const prevBest = db.userBest(u.id, puzzleId); // before recording this outcome
     db.finishAttempt(id, u.id, { outcome: body.outcome, movesUsed, durationMs, moveSeq });
     return sendJson(res, 200, {
-      best: db.userBest(u.id, level),
-      worldBest: db.worldBest(level),
+      best: db.userBest(u.id, puzzleId),
+      worldBest: db.worldBest(puzzleId),
       isRecord: body.outcome === "won" && (prevBest == null || movesUsed < prevBest),
     });
   }
@@ -353,6 +355,39 @@ async function handleApi(req, res, url, db) {
     if (!targetId) return sendJson(res, 400, { error: 'bad user id' });
     if (targetId === u.id) return sendJson(res, 400, { error: "can't delete yourself" });
     db.deleteUser(targetId);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // GET /api/admin/puzzles  — full catalogue with stats, for the ordering UI.
+  if (method === 'GET' && parts[1] === 'admin' && parts[2] === 'puzzles' && parts.length === 3) {
+    const u = requireAdmin(); if (!u) return;
+    return sendJson(res, 200, db.listPuzzles(u.id));
+  }
+
+  // PUT /api/admin/puzzles/order  { ids: [...] }  — set the exact pinned order.
+  if (method === 'PUT' && parts[1] === 'admin' && parts[2] === 'puzzles' && parts[3] === 'order') {
+    const u = requireAdmin(); if (!u) return;
+    const body = await readJson(req);
+    const ids = Array.isArray(body.ids) ? body.ids.map(toInt).filter((n) => n != null) : null;
+    if (!ids) return sendJson(res, 400, { error: 'bad ids' });
+    db.reorderPinned(ids);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // PATCH /api/admin/puzzles/:id  { pinned, sortOrder }
+  if (method === 'PATCH' && parts[1] === 'admin' && parts[2] === 'puzzles' && parts.length === 4) {
+    const u = requireAdmin(); if (!u) return;
+    const id = toInt(parts[3]);
+    if (!id) return sendJson(res, 400, { error: 'bad puzzle id' });
+    const body = await readJson(req);
+    try {
+      db.setPuzzleOrder(id, {
+        pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
+        sortOrder: toInt(body.sortOrder) ?? undefined,
+      });
+    } catch (e) {
+      return sendJson(res, 404, { error: e.message });
+    }
     return sendJson(res, 200, { ok: true });
   }
 

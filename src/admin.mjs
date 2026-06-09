@@ -85,6 +85,94 @@ async function loadUsers() {
   });
 }
 
+/* --- Featured puzzles: pin + order ----------------------------------------- */
+
+// Working copy of the pinned order (an array of puzzle ids), edited locally and
+// persisted with "Save order". `puzzles` is the full catalogue (server order).
+let puzzles = [];
+let featured = [];
+
+const pct = (v) => (v == null ? '–' : Math.round(v * 100) + '%');
+
+async function loadPuzzles() {
+  const wrap = $('puzzleAdminWrap');
+  puzzles = await api.adminListPuzzles();
+  if (!Array.isArray(puzzles)) {
+    wrap.innerHTML = '<p class="muted">Could not load puzzles.</p>';
+    return;
+  }
+  featured = puzzles.filter((p) => p.pinned).map((p) => p.id);
+  renderPuzzles();
+}
+
+function byId(id) { return puzzles.find((p) => p.id === id); }
+
+function puzzleRow(p, opts = {}) {
+  const meta = `${p.numCubes} cubes · scramble ${p.scramble} · ${pct(p.failRate)} fail` +
+    (p.worldBest != null ? ` · world ${p.worldBest}` : '');
+  return `<div class="puzzle-row" data-id="${p.id}">
+    <span class="puzzle-name">${esc(p.name)}</span>
+    <span class="muted puzzle-meta">${meta}</span>
+    <span class="puzzle-actions">${opts.actions || ''}</span>
+  </div>`;
+}
+
+function renderPuzzles() {
+  const wrap = $('puzzleAdminWrap');
+  const featuredRows = featured.map((id, i) => {
+    const p = byId(id);
+    if (!p) return '';
+    const actions =
+      `<button class="link-btn move-btn" data-id="${id}" data-dir="-1" type="button" ${i === 0 ? 'disabled' : ''}>↑</button>` +
+      `<button class="link-btn move-btn" data-id="${id}" data-dir="1" type="button" ${i === featured.length - 1 ? 'disabled' : ''}>↓</button>` +
+      `<button class="link-btn unpin-btn" data-id="${id}" type="button">Unpin</button>`;
+    return puzzleRow(p, { actions });
+  }).join('');
+
+  const others = puzzles.filter((p) => !featured.includes(p.id));
+  const otherRows = others.map((p) =>
+    puzzleRow(p, { actions: `<button class="link-btn pin-btn" data-id="${p.id}" type="button">Pin</button>` })
+  ).join('');
+
+  wrap.innerHTML =
+    `<div class="puzzle-list">
+       <h3>Featured (${featured.length})</h3>
+       ${featuredRows || '<p class="muted">None pinned yet — pin a puzzle below.</p>'}
+       <div class="puzzle-save">
+         <button id="savePuzzleOrder" class="primary" type="button">Save order</button>
+         <span id="puzzleSaveMsg" class="muted"></span>
+       </div>
+       <h3>All puzzles</h3>
+       ${otherRows || '<p class="muted">All puzzles are featured.</p>'}
+     </div>`;
+
+  wrap.querySelectorAll('.pin-btn').forEach((b) =>
+    b.addEventListener('click', () => { featured.push(Number(b.dataset.id)); renderPuzzles(); }));
+  wrap.querySelectorAll('.unpin-btn').forEach((b) =>
+    b.addEventListener('click', () => { featured = featured.filter((id) => id !== Number(b.dataset.id)); renderPuzzles(); }));
+  wrap.querySelectorAll('.move-btn').forEach((b) =>
+    b.addEventListener('click', () => {
+      const id = Number(b.dataset.id);
+      const dir = Number(b.dataset.dir);
+      const i = featured.indexOf(id);
+      const j = i + dir;
+      if (j < 0 || j >= featured.length) return;
+      [featured[i], featured[j]] = [featured[j], featured[i]];
+      renderPuzzles();
+    }));
+  $('savePuzzleOrder').addEventListener('click', async () => {
+    const msg = $('puzzleSaveMsg');
+    msg.textContent = 'Saving…';
+    try {
+      await api.adminReorderPuzzles(featured);
+      await loadPuzzles();
+      $('puzzleSaveMsg').textContent = 'Saved.';
+    } catch (e) {
+      msg.textContent = `Failed: ${e.message}`;
+    }
+  });
+}
+
 async function boot() {
   const online = await api.probe();
   if (!online) {
@@ -95,9 +183,10 @@ async function boot() {
   renderAccount();
   if (!currentUser?.isAdmin) {
     $('userTableWrap').innerHTML = '<p class="muted">You must be an admin to view this page. <a href="login.html" style="color:var(--accent)">Sign in</a>.</p>';
+    $('puzzleAdminWrap').innerHTML = '';
     return;
   }
-  await loadUsers();
+  await Promise.all([loadUsers(), loadPuzzles()]);
 }
 
 boot();

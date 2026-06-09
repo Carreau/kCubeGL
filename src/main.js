@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { mulberry32, hashLevelSeed, levelParams, baseBudget, shuffle } from "./shared.mjs";
+import { mulberry32, shuffle, buildCatalog, catalogByName } from "./shared.mjs";
 import * as api from "./api.mjs";
 
 /* ============================================================================
@@ -205,25 +205,21 @@ function loadStore() {
 function saveStore(s) {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch { /* ignore */ }
 }
-function bestFor(level) {
+function bestFor(name) {
   const b = loadStore().best;
-  return b && b[level] !== undefined ? b[level] : null;
+  return b && b[name] !== undefined ? b[name] : null;
 }
-function maxLevel() {
-  return loadStore().maxLevel || 0;
-}
-// Record a clear: keep the fewest moves ever used to solve this level index.
-function recordScore(level, movesUsed) {
+// Record a clear: keep the fewest moves ever used to solve this puzzle (by name).
+function recordScore(name, movesUsed) {
   const s = loadStore();
   s.best = s.best || {};
   s.cleared = s.cleared || {};
-  const prev = s.best[level];
+  const prev = s.best[name];
   const isRecord = prev === undefined || movesUsed < prev;
-  if (isRecord) s.best[level] = movesUsed;
-  s.cleared[level] = (s.cleared[level] || 0) + 1;
-  s.maxLevel = Math.max(s.maxLevel || 0, level);
+  if (isRecord) s.best[name] = movesUsed;
+  s.cleared[name] = (s.cleared[name] || 0) + 1;
   saveStore(s);
-  return { isRecord, best: s.best[level], prev };
+  return { isRecord, best: s.best[name], prev };
 }
 
 /* --- Three.js scene --------------------------------------------------------- */
@@ -339,9 +335,9 @@ class Cube {
 /* --- Game state ------------------------------------------------------------- */
 
 const game = {
-  level: 1,
-  menuLevel: 1, // level chosen on the menu (for replays)
-  bonus: 0, // carried-over moves earned by clearing levels
+  puzzleName: null, // name of the current puzzle (the public key, shown in HUD/URL)
+  order: [], // ordered list of puzzle names (for "Next") — catalogue / admin order
+  bonus: 0, // carried-over moves earned by clearing puzzles
   cubes: [],
   selected: null, // index into cubes
   moves: 0, // remaining move budget
@@ -454,8 +450,8 @@ function connectedCells(n) {
  * human-solvable. The recorded reverse sequence powers "show solution".
  * ------------------------------------------------------------------------- */
 
-// levelParams() now lives in src/shared.mjs so the server can compute the same
-// metadata (cube count, scramble depth, par) without loading the game engine.
+// The puzzle catalogue (cube count, scramble depth, par, name) lives in
+// src/shared.mjs so the server can seed the same puzzles without the game engine.
 
 function scrambleRoll(cube, forbidKey = null) {
   // Pick a random direction whose target cell is on-board and empty, then roll.
@@ -524,15 +520,16 @@ function applyRollLogic(cube, dir, nr, nc) {
   cube.syncMesh();
 }
 
-function buildLevel(level, config) {
+function buildLevel(config) {
   // Seed all randomness from the puzzle's seed so this exact board is reproduced
   // identically on every device — the basis for fair leaderboards. The config
-  // comes from the server (enabling reordering) with a local fallback for offline.
+  // comes from the server with a local fallback (the deterministic catalogue) for
+  // offline play.
   rng = mulberry32(config.seed);
 
-  // Pick which face color is "solved" for this level, and set the initial cube
-  // orientation before scrambling. Drawn from the level's seeded RNG so the
-  // choice is stable for every player on level N.
+  // Pick which face color is "solved" for this puzzle, and set the initial cube
+  // orientation before scrambling. Drawn from the puzzle's seeded RNG so the
+  // choice is stable for every player.
   const targetColorId = rint(COLORS.length);
   game.targetColor = targetColorId;
 
@@ -746,24 +743,25 @@ function stepWalk(dt) {
 function afterMove() {
   if (isSolved()) {
     game.state = "won";
-    game.bonus += 1; // clearing a level grants +1 carried move
+    game.bonus += 1; // clearing a puzzle grants +1 carried move
     if (DEBUG_SOLVE) {
       console.log(
-        `[solve] player cleared level ${game.level} in ${game.movesUsed} moves · ` +
+        `[solve] player cleared ${game.puzzleName} in ${game.movesUsed} moves · ` +
         `cursor path (${game.userMoves.length} keys): ${game.userMoves.join("") || "(none)"}`
       );
     }
     finalizeAttempt("won"); // close the attempt as a win (records moves + time + path)
-    const { isRecord, best, prev } = recordScore(game.level, game.movesUsed);
+    const { isRecord, best, prev } = recordScore(game.puzzleName, game.movesUsed);
     const scoreLine = isRecord
       ? (prev === undefined
           ? `Solved in <b>${game.movesUsed}</b> moves.`
           : `Solved in <b>${game.movesUsed}</b> moves — <b>new best!</b> (was ${prev})`)
       : `Solved in <b>${game.movesUsed}</b> moves (best ${best}).`;
+    const hasNext = nextPuzzleName() != null;
     showOverlay(
       "Solved!",
-      `${scoreLine}<br>Level ${game.level} cleared. <b>+1</b> bonus move banked (carried: ${game.bonus}).`,
-      "Next level"
+      `${scoreLine}<br><b>${game.puzzleName}</b> cleared. <b>+1</b> bonus move banked (carried: ${game.bonus}).`,
+      hasNext ? "Next puzzle" : "Back to puzzles"
     );
     updateHud();
   } else if (game.moves <= 0) {
@@ -882,7 +880,7 @@ function solutionStep() {
 function dumpRepro() {
   const starts = game.cubes.map((c, i) => [game.initial[i].row, game.initial[i].col]);
   const solution = game.solution.map((m) => [game.cubes.indexOf(m.cube), m.key]);
-  console.error("[solve] REPRO " + JSON.stringify({ level: game.level, starts, solution }));
+  console.error("[solve] REPRO " + JSON.stringify({ puzzle: game.puzzleName, starts, solution }));
 }
 
 /* --- Presentation: cursor + HUD -------------------------------------------- */
@@ -901,10 +899,10 @@ function updateCursor(snap) {
 }
 
 function updateHud() {
-  el.level.textContent = game.level;
+  el.level.textContent = game.puzzleName ?? "–";
   el.moves.textContent = Math.max(0, game.moves);
   el.cubes.textContent = game.cubes.length;
-  const b = bestFor(game.level);
+  const b = bestFor(game.puzzleName);
   el.best.textContent = b === null ? "–" : b;
 }
 
@@ -934,23 +932,21 @@ async function refreshIdentity() {
 }
 
 // Open a new attempt for the current board and refresh the world-record badge.
-// `levelInfo` is the already-fetched GET /api/levels/:level response from
+// `puzzleInfo` is the already-fetched GET /api/puzzles/:name response from
 // startLevel; passing it avoids a duplicate request. When null (e.g. retryLevel),
 // a fresh fetch is made instead.
-function beginAttempt(levelInfo = null) {
+function beginAttempt(puzzleInfo = null) {
   game.attemptStart = performance.now();
   game.attemptId = null;
   api.startAttempt({
-    level: game.level,
-    numCubes: game.cubes.length,
-    par: game.par,
+    puzzle: game.puzzleName,
     optimal: game.optimal,
   }).then((r) => { if (r && r.attemptId) game.attemptId = r.attemptId; });
 
-  if (levelInfo) {
-    if (el.world) el.world.textContent = levelInfo.worldBest == null ? "–" : levelInfo.worldBest;
+  if (puzzleInfo) {
+    if (el.world) el.world.textContent = puzzleInfo.worldBest == null ? "–" : puzzleInfo.worldBest;
   } else {
-    api.getLevel(game.level).then((info) => {
+    api.getPuzzle(game.puzzleName).then((info) => {
       if (info && el.world) el.world.textContent = info.worldBest == null ? "–" : info.worldBest;
     });
   }
@@ -972,51 +968,64 @@ function finalizeAttempt(outcome) {
   });
 }
 
-// Keep the address bar in step with the level being played, so a refresh or a
+// Keep the address bar in step with the puzzle being played, so a refresh or a
 // shared link lands on the same puzzle.
-function syncUrl(level) {
+function syncUrl(name) {
   try {
     const u = new URL(location.href);
-    u.searchParams.set("level", String(level));
+    u.searchParams.set("puzzle", name);
     history.replaceState(null, "", u);
   } catch { /* ignore */ }
 }
 
 /* --- Flow control ----------------------------------------------------------- */
 
-// Build and start a fresh board for `level`, opening a new tracked attempt and
-// abandoning any still-open one. The single entry point used by boot, the
-// landing page, "Next level" and a fresh Retry.
-async function startLevel(level) {
+// The puzzle after the current one in display order (catalogue / admin order),
+// or null if this is the last one.
+function nextPuzzleName() {
+  const i = game.order.indexOf(game.puzzleName);
+  return i >= 0 && i + 1 < game.order.length ? game.order[i + 1] : null;
+}
+
+// Build and start a fresh board for the named puzzle, opening a new tracked
+// attempt and abandoning any still-open one. The single entry point used by
+// boot, "Next puzzle" and a fresh Retry.
+async function startLevel(name) {
   finalizeAttempt("abandoned"); // close a prior open attempt (old movesUsed) first
-  game.level = level;
-  game.menuLevel = level;
+  game.puzzleName = name;
   hideOverlay();
 
   // One request serves two purposes: derive the puzzle config (seed + params)
   // and pre-load world-best so beginAttempt can show it without a second fetch.
-  // Falls back to local deterministic params when the backend is unreachable.
-  const levelInfo = await api.getLevel(level);
-  const config = (levelInfo && levelInfo.seed != null)
-    ? { seed: levelInfo.seed, numCubes: levelInfo.numCubes, scramble: levelInfo.scramble, par: levelInfo.par }
-    : { seed: hashLevelSeed(level), ...levelParams(level), par: baseBudget(level) };
+  // Falls back to the deterministic catalogue when the backend is unreachable.
+  const puzzleInfo = await api.getPuzzle(name);
+  const offline = catalogByName(name);
+  const config = (puzzleInfo && puzzleInfo.seed != null)
+    ? { seed: puzzleInfo.seed, numCubes: puzzleInfo.numCubes, scramble: puzzleInfo.scramble, par: puzzleInfo.par }
+    : (offline
+        ? { seed: offline.seed, numCubes: offline.numCubes, scramble: offline.scramble, par: offline.par }
+        : null);
+  if (!config) { goToLevels(); return; } // unknown puzzle name — bail to the picker
 
   game.puzzleConfig = config;
-  buildLevel(level, config);
+  buildLevel(config);
   game.state = "playing";
-  syncUrl(level);
-  beginAttempt(levelInfo);
+  syncUrl(name);
+  beginAttempt(puzzleInfo);
 }
 
-// Enter a level chosen from the landing page / URL: a clean run (bonus reset).
-function enterLevel(level) {
+// Enter a puzzle chosen from the landing page / URL: a clean run (bonus reset).
+function enterLevel(name) {
   game.bonus = 0;
-  startLevel(level);
+  startLevel(name);
 }
 
-// Advance after a win, carrying the +1 bonus the win just banked.
+// Advance after a win to the next puzzle in order, carrying the banked bonus.
+// If there is no next puzzle, return to the picker.
 function nextLevel() {
-  startLevel(game.level + 1);
+  const next = nextPuzzleName();
+  if (next) startLevel(next);
+  else goToLevels();
 }
 
 function retryLevel() {
@@ -1025,7 +1034,7 @@ function retryLevel() {
   // rather than generating a fresh scramble. Abandon any open attempt first.
   finalizeAttempt("abandoned");
   hideOverlay();
-  if (game.initial.length === 0) { buildLevel(game.level, game.puzzleConfig); }
+  if (game.initial.length === 0) { buildLevel(game.puzzleConfig); }
   else {
     restoreInitial();
     game.moves = game.startMoves;
@@ -1134,12 +1143,24 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-// Boot — the landing page (index.html) is the level picker now; it links here
-// with ?level=N. Read that level (default 1), show who's playing, and drop the
-// player straight onto the board. The "Levels" button / M key returns to it.
-const bootParams = new URLSearchParams(location.search);
-let bootLevel = parseInt(bootParams.get("level"), 10);
-if (!Number.isFinite(bootLevel) || bootLevel < 1) bootLevel = 1;
-refreshIdentity();
-enterLevel(bootLevel);
+// Load the ordered list of puzzle names (for "Next puzzle"). Uses the server's
+// order (pinned first) when online, falling back to the deterministic catalogue.
+async function loadOrder() {
+  const list = await api.listPuzzles();
+  game.order = Array.isArray(list) && list.length
+    ? list.map((p) => p.name)
+    : buildCatalog().map((p) => p.name);
+}
+
+// Boot — the landing page (index.html) is the puzzle picker now; it links here
+// with ?puzzle=NAME. Read that name (default: the first puzzle in order), show
+// who's playing, and drop the player onto the board. "Puzzles" / M returns to it.
+async function boot() {
+  refreshIdentity();
+  await loadOrder();
+  const wanted = new URLSearchParams(location.search).get("puzzle");
+  const name = (wanted && game.order.includes(wanted)) ? wanted : game.order[0];
+  enterLevel(name);
+}
+boot();
 requestAnimationFrame(loop);
