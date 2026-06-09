@@ -38,9 +38,10 @@ try {
   const who = await page.$eval(".who-pill", (e) => e.textContent);
   if (!/tester/.test(who)) fail(`expected to be signed in as tester, saw "${who}"`);
 
-  // --- Open level 1 and play. ---
-  await page.click('.card[data-level="1"]');
-  await page.waitForURL(/play\.html\?level=1/, { timeout: 10000 });
+  // --- Open the first puzzle and play. ---
+  const firstName = await page.$eval(".card", (e) => e.getAttribute("data-name"));
+  await page.click(`.card[data-name="${firstName}"]`);
+  await page.waitForURL(/play\.html\?puzzle=/, { timeout: 10000 });
   await page.waitForTimeout(1500); // game init + Three.js from CDN
 
   // Open info panel to access cube count
@@ -58,18 +59,19 @@ try {
     await page.waitForTimeout(150);
   }
   await page.keyboard.press("KeyS"); // show solution
-  // Playback is intentionally slowed (debug instrumentation), so wait for the
-  // end-of-solution overlay to appear rather than relying on a fixed delay.
+  // Playback is intentionally slowed (debug instrumentation) and a catalogue
+  // puzzle can have a long scramble, so wait generously for the end-of-solution
+  // overlay rather than relying on a fixed delay.
   await page
-    .waitForFunction(() => !document.getElementById("overlay").classList.contains("hidden"), { timeout: 30000 })
+    .waitForFunction(() => !document.getElementById("overlay").classList.contains("hidden"), undefined, { timeout: 90000 })
     .catch(() => {});
 
   const overlayVisible = await page.$eval("#overlay", (e) => !e.classList.contains("hidden"));
   if (!overlayVisible) fail("expected the solution overlay to be shown after playback");
 
-  // --- Front-to-back: starting the level recorded an attempt in the DB. ---
-  const attempts = db.db.prepare("SELECT COUNT(*) AS n FROM attempts WHERE level = 1").get().n;
-  if (!(attempts >= 1)) fail(`expected an attempt to be recorded for level 1, got ${attempts}`);
+  // --- Front-to-back: starting the puzzle recorded an attempt in the DB. ---
+  const attempts = db.db.prepare("SELECT COUNT(*) AS n FROM attempts").get().n;
+  if (!(attempts >= 1)) fail(`expected an attempt to be recorded, got ${attempts}`);
 
   if (errors.length) for (const e of errors) fail(e);
 } catch (e) {

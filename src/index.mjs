@@ -1,18 +1,23 @@
 /* ============================================================================
- * Landing page (index.html): account widget, level grid, and per-level
- * leaderboard + difficulty detail.
+ * Landing page (index.html): account widget, the puzzle catalogue, and a
+ * per-puzzle leaderboard + difficulty detail.
+ *
+ * Puzzles are a fixed, named pool (no level numbers, no auto-create). The grid
+ * can be sorted by difficulty signals — failure rate, how far players land from
+ * the scramble's optimal, cube count, or name.
  *
  * Works against the optional backend (server/server.mjs) but degrades cleanly:
- * with no server it still renders a level grid from the deterministic level
- * params and your locally-saved best scores — just without leaderboards.
+ * with no server it renders the same catalogue from the deterministic
+ * src/shared.mjs definitions and your locally-saved best scores — just without
+ * leaderboards or cross-player difficulty stats.
  * ========================================================================== */
 
 import * as api from "./api.mjs";
-import { levelParams, baseBudget } from "./shared.mjs";
+import { buildCatalog } from "./shared.mjs";
 
 const LOCAL_KEY = "kcube.v1"; // same store the game writes best scores to
 
-const state = { online: false, user: null, levels: [] };
+const state = { online: false, user: null, puzzles: [], sort: "featured" };
 
 const $ = (id) => document.getElementById(id);
 
@@ -24,7 +29,7 @@ function esc(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-// Locally-saved best scores, used as the offline fallback for "your best".
+// Locally-saved best scores (keyed by puzzle name), the offline "your best".
 function readLocalBest() {
   try { return (JSON.parse(localStorage.getItem(LOCAL_KEY)) || {}).best || {}; }
   catch { return {}; }
@@ -40,9 +45,12 @@ function fmtMs(ms) {
   return m + "m " + String(Math.round(s - m * 60)).padStart(2, "0") + "s";
 }
 
-function clampCount() {
-  const n = parseInt($("levelCount").value, 10);
-  return Number.isFinite(n) ? Math.max(6, Math.min(60, n)) : 12;
+const pct = (v) => (v == null ? "–" : Math.round(v * 100) + "%");
+
+// "Moves over optimal": how far the world's best solve sits above the scramble's
+// length — a measured proxy for how tricky the puzzle is in practice.
+function overScramble(p) {
+  return p.worldBest != null ? p.worldBest - p.scramble : null;
 }
 
 /* --- account widget --------------------------------------------------------- */
@@ -73,9 +81,9 @@ async function renderMyStats() {
   const s = await api.myStats();
   if (!s) { box.classList.add("hidden"); return; }
   const chips = [
-    ["Levels solved", dash(s.solved)],
+    ["Puzzles solved", dash(s.solved)],
     ["Attempts", dash(s.attempts)],
-    ["Win rate", s.attempts ? Math.round(s.winRate * 100) + "%" : "–"],
+    ["Win rate", s.attempts ? pct(s.winRate) : "–"],
     ["Avg moves over best-known", s.avgMovesOverOptimal == null ? "–" : "+" + s.avgMovesOverOptimal.toFixed(1)],
     ["Avg solve time", fmtMs(s.avgDurationMs)],
   ];
@@ -86,86 +94,105 @@ async function renderMyStats() {
   box.classList.remove("hidden");
 }
 
-/* --- level grid ------------------------------------------------------------- */
+/* --- puzzle catalogue ------------------------------------------------------- */
 
-function offlineLevels(count) {
+// Offline fallback: the deterministic catalogue + your locally-saved bests.
+function offlinePuzzles() {
   const local = readLocalBest();
-  return Array.from({ length: count }, (_, i) => {
-    const level = i + 1;
-    return {
-      level,
-      numCubes: levelParams(level).numCubes,
-      par: baseBudget(level),
-      optimal: null,
-      yourBest: local[level] ?? null,
-      worldBest: null,
-      solvers: 0,
-    };
-  });
+  return buildCatalog().map((p) => ({
+    id: p.name,           // offline has no DB id; the name is the key everywhere
+    name: p.name,
+    numCubes: p.numCubes,
+    scramble: p.scramble,
+    par: p.par,
+    optimal: null,
+    pinned: false,
+    yourBest: local[p.name] ?? null,
+    worldBest: null,
+    solvers: 0,
+    attempts: 0,
+    winRate: 0,
+    failRate: 0,
+    avgMoves: null,
+  }));
 }
+
+// Comparators for each sort key. Nulls always sort last for "harder = higher".
+const SORTS = {
+  featured: null, // keep server/catalogue order (pinned first)
+  fail: (a, b) => (b.failRate || 0) - (a.failRate || 0) || a.name.localeCompare(b.name),
+  over: (a, b) => nullLast(overScramble(b)) - nullLast(overScramble(a)) || a.name.localeCompare(b.name),
+  cubes: (a, b) => b.numCubes - a.numCubes || a.name.localeCompare(b.name),
+  name: (a, b) => a.name.localeCompare(b.name),
+};
+const nullLast = (v) => (v == null ? -Infinity : v);
 
 async function loadGrid() {
-  const count = clampCount();
-  let levels = state.online ? await api.listLevels(count) : null;
-  if (!Array.isArray(levels)) levels = offlineLevels(count);
-  state.levels = levels;
-  renderGrid(levels);
+  let puzzles = state.online ? await api.listPuzzles() : null;
+  if (!Array.isArray(puzzles)) puzzles = offlinePuzzles();
+  state.puzzles = puzzles;
+  renderGrid();
 }
 
-function renderGrid(levels) {
-  $("grid").innerHTML = levels.map((L) => {
-    const solved = L.yourBest != null;
+function renderGrid() {
+  const cmp = SORTS[state.sort];
+  const list = cmp ? [...state.puzzles].sort(cmp) : state.puzzles;
+  $("grid").innerHTML = list.map((p) => {
+    const solved = p.yourBest != null;
+    const over = overScramble(p);
     return (
-      `<div class="card${solved ? " solved" : ""}" data-level="${L.level}" tabindex="0" role="button">` +
-        `<div class="card-top"><span class="lvl">Level ${L.level}</span>` +
+      `<div class="card${solved ? " solved" : ""}" data-name="${esc(p.name)}" tabindex="0" role="button">` +
+        `<div class="card-top"><span class="lvl">${esc(p.name)}</span>` +
+        (p.pinned ? `<span class="pin-badge" title="featured">★</span>` : "") +
         `<span class="dot" title="${solved ? "solved" : "unsolved"}"></span></div>` +
-        `<div class="card-mid muted">${L.numCubes} cubes · par ${L.par}` +
-        (L.optimal ? ` · best-known ${L.optimal}` : "") + `</div>` +
+        `<div class="card-mid muted">${p.numCubes} cubes · par ${p.par}` +
+        (p.optimal ? ` · best-known ${p.optimal}` : "") + `</div>` +
         `<div class="card-stats">` +
-          `<span>you <b>${dash(L.yourBest)}</b></span>` +
-          `<span>world <b>${dash(L.worldBest)}</b></span>` +
-          (L.solvers ? `<span class="muted">${L.solvers} solved</span>` : "") +
+          `<span>you <b>${dash(p.yourBest)}</b></span>` +
+          `<span>world <b>${dash(p.worldBest)}</b></span>` +
+          (p.attempts ? `<span class="muted" title="failure rate across all players">${pct(p.failRate)} fail</span>` : "") +
+          (over != null ? `<span class="muted" title="world best over scramble length">+${over} over</span>` : "") +
         `</div>` +
         `<div class="card-actions">` +
           `<span class="play-hint">Play ▸</span>` +
-          `<button class="lb-btn link-btn" type="button" data-level="${L.level}">Leaderboard</button>` +
+          `<button class="lb-btn link-btn" type="button" data-name="${esc(p.name)}">Leaderboard</button>` +
         `</div>` +
       `</div>`
     );
   }).join("");
 }
 
-function go(level) { location.href = `play.html?level=${level}`; }
+function go(name) { location.href = `play.html?puzzle=${encodeURIComponent(name)}`; }
 
 // Delegated grid clicks: the Leaderboard button opens the detail; anything else
-// on a card starts that level.
+// on a card starts that puzzle.
 $("grid").addEventListener("click", (e) => {
   const lb = e.target.closest(".lb-btn");
-  if (lb) { e.stopPropagation(); openDetail(Number(lb.dataset.level)); return; }
+  if (lb) { e.stopPropagation(); openDetail(lb.dataset.name); return; }
   const card = e.target.closest(".card");
-  if (card) go(Number(card.dataset.level));
+  if (card) go(card.dataset.name);
 });
 $("grid").addEventListener("keydown", (e) => {
   if (e.key !== "Enter" && e.key !== " ") return;
   const card = e.target.closest(".card");
-  if (card) { e.preventDefault(); go(Number(card.dataset.level)); }
+  if (card) { e.preventDefault(); go(card.dataset.name); }
 });
 
-/* --- per-level detail (leaderboard + difficulty) ---------------------------- */
+/* --- per-puzzle detail (leaderboard + difficulty) --------------------------- */
 
-async function openDetail(level) {
+async function openDetail(name) {
   const body = $("detailBody");
-  body.innerHTML = `<h2>Level ${level}</h2><p class="muted">Loading…</p>`;
+  body.innerHTML = `<h2>${esc(name)}</h2><p class="muted">Loading…</p>`;
   $("detail").classList.remove("hidden");
 
-  const info = state.online ? await api.getLevel(level) : null;
+  const info = state.online ? await api.getPuzzle(name) : null;
   if (!info) {
     body.innerHTML =
-      `<h2>Level ${level}</h2>` +
+      `<h2>${esc(name)}</h2>` +
       `<p class="muted">Leaderboards &amp; difficulty stats need the server. ` +
       `Run <code>npm start</code> and sign in.</p>` +
-      `<button class="primary" type="button" id="detailPlay">Play level ${level}</button>`;
-    $("detailPlay").addEventListener("click", () => go(level));
+      `<button class="primary" type="button" id="detailPlay">Play ${esc(name)}</button>`;
+    $("detailPlay").addEventListener("click", () => go(name));
     return;
   }
 
@@ -180,7 +207,9 @@ async function openDetail(level) {
     ["Players", dash(st.players)],
     ["Attempts", dash(st.attempts)],
     ["Solves", dash(st.solves)],
-    ["Win rate", st.attempts ? Math.round((st.winRate || 0) * 100) + "%" : "–"],
+    ["Win rate", st.attempts ? pct(st.winRate) : "–"],
+    ["Failure rate", st.attempts ? pct(st.failRate) : "–"],
+    ["Scramble length", dash(info.scramble)],
     ["World best", dash(info.worldBest)],
     ["Best-known", dash(info.optimal)],
     ["Avg winning moves", st.avgMoves == null ? "–" : st.avgMoves.toFixed(1)],
@@ -190,7 +219,7 @@ async function openDetail(level) {
   ];
 
   body.innerHTML =
-    `<h2>Level ${level} <span class="muted">· ${dash(info.numCubes)} cubes · par ${dash(info.par)}</span></h2>` +
+    `<h2>${esc(info.name)} <span class="muted">· ${dash(info.numCubes)} cubes · par ${dash(info.par)}</span></h2>` +
     `<div class="chips small">` +
     diff.map(([k, v]) => `<div class="chip"><span class="k">${k}</span><span class="v">${v}</span></div>`).join("") +
     `</div>` +
@@ -198,8 +227,8 @@ async function openDetail(level) {
     (rows
       ? `<table class="lb"><thead><tr><th>#</th><th>player</th><th>moves</th><th>time</th><th>tries</th></tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="muted">No solves yet — be the first.</p>`) +
-    `<button class="primary" type="button" id="detailPlay">Play level ${level}</button>`;
-  $("detailPlay").addEventListener("click", () => go(level));
+    `<button class="primary" type="button" id="detailPlay">Play ${esc(info.name)}</button>`;
+  $("detailPlay").addEventListener("click", () => go(info.name));
 }
 
 function closeDetail() { $("detail").classList.add("hidden"); }
@@ -207,7 +236,10 @@ $("detailClose").addEventListener("click", closeDetail);
 $("detail").addEventListener("click", (e) => { if (e.target.id === "detail") closeDetail(); });
 window.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetail(); });
 
-$("levelCount").addEventListener("change", loadGrid);
+$("sortBy").addEventListener("change", (e) => {
+  state.sort = e.target.value;
+  renderGrid();
+});
 
 /* --- boot ------------------------------------------------------------------- */
 

@@ -6,24 +6,25 @@
  * we store one `attempts` row and later stamp it with an outcome (won / lost /
  * abandoned), its move count and its duration. Best-scores are then just
  * MIN(moves) over winning attempts, and the richer questions the project wants
- * to answer later — "how skilled is this player?", "how hard is this puzzle?" —
- * are aggregate queries over the same rows (see userStats / levelStats below).
+ * to answer — "how skilled is this player?", "how hard is this puzzle?" — are
+ * aggregate queries over the same rows (see userStats / puzzleStats below).
  *
- * Level ordering design
- * ─────────────────────
- * `puzzles`  — the actual puzzle content: a (seed, num_cubes, scramble, par)
- *              tuple that the client feeds to mulberry32 to reproduce the board
- *              deterministically. Decoupled from slot ordering.
- * `levels`   — ordered slots (level 1, 2, 3 …). Each slot points to a puzzle
- *              via puzzle_id. Swapping puzzle_id reorders without touching
- *              puzzle content or historical attempt data.
- * `attempts` — records both the slot (level) and the puzzle (puzzle_id) so
- *              per-puzzle difficulty stats survive reordering.
+ * Puzzle model
+ * ────────────
+ * `puzzles`  — the actual puzzle content AND identity. Each row is the opaque
+ *              key everything else references (attempts.puzzle_id). It carries a
+ *              stable random `name` (shown to players and used in URLs), the
+ *              `seed` the client feeds to mulberry32 to reproduce the board, the
+ *              board size/difficulty, and admin ordering (`pinned`, `sort_order`).
+ *              The catalogue is a fixed pool seeded from src/shared.mjs — there
+ *              is no level numbering and no infinite auto-create.
+ * `attempts` — one row per started board, referencing the puzzle by id so
+ *              per-puzzle difficulty stats are unambiguous.
  * ========================================================================== */
 
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
-import { baseBudget, hashLevelSeed, levelParams } from "../src/shared.mjs";
+import { buildCatalog } from "../src/shared.mjs";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -49,35 +50,25 @@ CREATE TABLE IF NOT EXISTS webauthn_challenges (
   expires_at  INTEGER NOT NULL
 );
 
--- Puzzle content: decoupled from slot ordering. seed feeds mulberry32 in the
--- browser; num_cubes/scramble/par describe the board size and difficulty.
+-- Puzzle content + identity. The id is the opaque key everything references;
+-- name is the stable, human-friendly handle shown to players and used in URLs.
 CREATE TABLE IF NOT EXISTS puzzles (
-  id         INTEGER PRIMARY KEY,
-  seed       INTEGER NOT NULL,           -- PRNG seed; deterministically reproduces the board
-  num_cubes  INTEGER NOT NULL,
-  scramble   INTEGER NOT NULL,
-  par        INTEGER NOT NULL,           -- bonus-free move budget
-  optimal    INTEGER,                    -- shortest known solve (client-reported)
-  created_at INTEGER NOT NULL DEFAULT (unixepoch())
-);
-
--- Level slots: the ordered list players navigate as "level 1, 2, 3 …".
--- puzzle_id may be reassigned to reorder without touching attempt history.
-CREATE TABLE IF NOT EXISTS levels (
-  level      INTEGER PRIMARY KEY,        -- slot number shown to players
-  puzzle_id  INTEGER REFERENCES puzzles(id),
-  num_cubes  INTEGER NOT NULL,
-  scramble   INTEGER NOT NULL,
-  par        INTEGER NOT NULL,           -- bonus-free move budget
-  optimal    INTEGER,                    -- shortest known solve (client-reported)
-  created_at INTEGER NOT NULL
+  id          INTEGER PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,      -- random handle, also the public key
+  seed        INTEGER NOT NULL,          -- PRNG seed; reproduces the board
+  num_cubes   INTEGER NOT NULL,
+  scramble    INTEGER NOT NULL,          -- generation depth ≈ shortest solve
+  par         INTEGER NOT NULL,          -- bonus-free move budget
+  optimal     INTEGER,                   -- shortest known solve (client-reported)
+  pinned      INTEGER NOT NULL DEFAULT 0,-- admin "feature this first" flag
+  sort_order  INTEGER NOT NULL DEFAULT 0,-- admin ordering among pinned puzzles
+  created_at  INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 CREATE TABLE IF NOT EXISTS attempts (
   id          INTEGER PRIMARY KEY,
   user_id     INTEGER NOT NULL REFERENCES users(id),
-  level       INTEGER NOT NULL REFERENCES levels(level),
-  puzzle_id   INTEGER REFERENCES puzzles(id),           -- which puzzle was actually played
+  puzzle_id   INTEGER NOT NULL REFERENCES puzzles(id),
   outcome     TEXT NOT NULL DEFAULT 'in_progress', -- in_progress|won|lost|abandoned
   moves_used  INTEGER,
   duration_ms INTEGER,
@@ -85,10 +76,9 @@ CREATE TABLE IF NOT EXISTS attempts (
   started_at  INTEGER NOT NULL,
   ended_at    INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_attempts_level       ON attempts(level);
-CREATE INDEX IF NOT EXISTS idx_attempts_user_level  ON attempts(user_id, level);
-CREATE INDEX IF NOT EXISTS idx_attempts_won         ON attempts(level, outcome, moves_used);
-CREATE INDEX IF NOT EXISTS idx_attempts_puzzle      ON attempts(puzzle_id, outcome, moves_used);
+CREATE INDEX IF NOT EXISTS idx_attempts_puzzle      ON attempts(puzzle_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_user_puzzle ON attempts(user_id, puzzle_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_won         ON attempts(puzzle_id, outcome, moves_used);
 `;
 
 const now = () => Date.now();
@@ -98,41 +88,9 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
-  migrate(db);
-  return new Db(db);
-}
-
-// Lightweight, idempotent migrations for DBs created before a column existed.
-// CREATE TABLE IF NOT EXISTS won't add new columns to an existing table, so we
-// ALTER them in by hand when missing.
-function migrate(db) {
-  ensureColumn(db, "attempts", "move_seq", "TEXT");
-  ensureColumn(db, "levels", "puzzle_id", "INTEGER");
-  ensureColumn(db, "attempts", "puzzle_id", "INTEGER");
-  ensureColumn(db, "users", "is_admin", "INTEGER NOT NULL DEFAULT 0");
-
-  // Back-fill puzzle rows for any level slots that predate the puzzles table.
-  // Uses the same seed formula the client falls back to offline, so existing
-  // boards are reproduced identically.
-  const unpopulated = db.prepare("SELECT * FROM levels WHERE puzzle_id IS NULL").all();
-  if (unpopulated.length > 0) {
-    const insertPuzzle = db.prepare(
-      "INSERT INTO puzzles (seed, num_cubes, scramble, par, optimal, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    );
-    const updateLevel = db.prepare("UPDATE levels SET puzzle_id = ? WHERE level = ?");
-    for (const row of unpopulated) {
-      const seed = hashLevelSeed(row.level);
-      const result = insertPuzzle.run(seed, row.num_cubes, row.scramble, row.par, row.optimal, row.created_at);
-      updateLevel.run(Number(result.lastInsertRowid), row.level);
-    }
-  }
-}
-
-function ensureColumn(db, table, column, def) {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
-  }
+  const wrapped = new Db(db);
+  wrapped.seedCatalog();
+  return wrapped;
 }
 
 export class Db {
@@ -221,7 +179,7 @@ export class Db {
     return row;
   }
 
-  /* --- admin ------------------------------------------------------------------ */
+  /* --- admin: users ----------------------------------------------------------- */
 
   listUsers() {
     return this.db.prepare(`
@@ -242,93 +200,90 @@ export class Db {
 
   /* --- puzzles ------------------------------------------------------------- */
 
-  // Find or create a puzzle by seed. Returns the puzzle id.
-  ensurePuzzle({ seed, numCubes, scramble, par, optimal = null }) {
-    const existing = this.db.prepare("SELECT id FROM puzzles WHERE seed = ?").get(seed);
-    if (existing) {
-      if (optimal != null) {
-        this.db.prepare(
-          "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
-        ).run(optimal, existing.id, optimal);
-      }
-      return existing.id;
-    }
-    const r = this.db
-      .prepare("INSERT INTO puzzles (seed, num_cubes, scramble, par, optimal, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(seed, numCubes, scramble, par, optimal, now());
-    return Number(r.lastInsertRowid);
-  }
-
-  /* --- levels -------------------------------------------------------------- */
-
-  // Upsert a level slot's metadata. Creates a puzzle row on first touch so the
-  // slot always points to a stored puzzle (enabling later reordering).
-  ensureLevel(level, { numCubes, par, optimal } = {}) {
-    const params = levelParams(level);
-    const nc = numCubes ?? params.numCubes;
-    const sc = params.scramble;
-    const pr = par ?? baseBudget(level);
-    const seed = hashLevelSeed(level);
-
-    const row = this.db.prepare("SELECT * FROM levels WHERE level = ?").get(level);
-    if (!row) {
-      const puzzleId = this.ensurePuzzle({ seed, numCubes: nc, scramble: sc, par: pr, optimal });
-      this.db
-        .prepare("INSERT INTO levels (level, puzzle_id, num_cubes, scramble, par, optimal, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(level, puzzleId, nc, sc, pr, optimal ?? null, now());
-      return;
-    }
-
-    // Level exists: propagate a better optimal to both tables.
-    if (optimal != null && (row.optimal == null || optimal < row.optimal)) {
-      this.db.prepare("UPDATE levels SET optimal = ? WHERE level = ?").run(optimal, level);
-      if (row.puzzle_id) {
-        this.db.prepare(
-          "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
-        ).run(optimal, row.puzzle_id, optimal);
-      }
+  // Idempotently insert the fixed catalogue (from src/shared.mjs). Matches on
+  // the unique name, so re-running never duplicates and never disturbs admin
+  // ordering or attempt history. New catalogue entries are appended.
+  seedCatalog() {
+    const insert = this.db.prepare(
+      `INSERT OR IGNORE INTO puzzles (name, seed, num_cubes, scramble, par, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    const ts = now();
+    for (const p of buildCatalog()) {
+      insert.run(p.name, p.seed, p.numCubes, p.scramble, p.par, p.order, ts);
     }
   }
 
-  // Level metadata, falling back to the deterministic params when the level has
-  // never been touched (so the grid can show par for unplayed levels). Always
-  // returns a seed so the client can reproduce the board without the game engine.
-  levelMeta(level) {
-    const row = this.db.prepare(
-      `SELECT l.level, l.puzzle_id, l.num_cubes, l.scramble, l.par, l.optimal, p.seed
-         FROM levels l LEFT JOIN puzzles p ON p.id = l.puzzle_id
-        WHERE l.level = ?`
-    ).get(level);
-    if (row) {
-      return {
-        level,
-        puzzleId: row.puzzle_id,
-        seed: row.seed ?? hashLevelSeed(level),
-        numCubes: row.num_cubes,
-        scramble: row.scramble,
-        par: row.par,
-        optimal: row.optimal,
-      };
-    }
-    // Unplayed level: compute from slot number (same formula the client uses offline).
-    const p = levelParams(level);
+  puzzleById(id) {
+    return this.db.prepare("SELECT * FROM puzzles WHERE id = ?").get(id) || null;
+  }
+
+  puzzleByName(name) {
+    return this.db.prepare("SELECT * FROM puzzles WHERE name = ?").get(name) || null;
+  }
+
+  // Shape a stored row into the metadata the client expects.
+  _puzzleMeta(row) {
+    if (!row) return null;
     return {
-      level,
-      puzzleId: null,
-      seed: hashLevelSeed(level),
-      numCubes: p.numCubes,
-      scramble: p.scramble,
-      par: baseBudget(level),
-      optimal: null,
+      id: row.id,
+      name: row.name,
+      seed: row.seed,
+      numCubes: row.num_cubes,
+      scramble: row.scramble,
+      par: row.par,
+      optimal: row.optimal,
+      pinned: row.pinned === 1,
+      sortOrder: row.sort_order,
     };
+  }
+
+  puzzleMeta(name) {
+    return this._puzzleMeta(this.puzzleByName(name));
+  }
+
+  // Record a better optimal (shortest known solve) for a puzzle.
+  recordOptimal(puzzleId, optimal) {
+    if (optimal == null) return;
+    this.db.prepare(
+      "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
+    ).run(optimal, puzzleId, optimal);
+  }
+
+  /* --- admin: puzzle ordering ------------------------------------------------- */
+
+  // Pin / unpin a puzzle and optionally set its position among pinned puzzles.
+  setPuzzleOrder(puzzleId, { pinned, sortOrder } = {}) {
+    const row = this.puzzleById(puzzleId);
+    if (!row) throw new Error(`puzzle ${puzzleId} not found`);
+    const p = pinned == null ? row.pinned : (pinned ? 1 : 0);
+    const so = sortOrder == null ? row.sort_order : sortOrder;
+    this.db.prepare("UPDATE puzzles SET pinned = ?, sort_order = ? WHERE id = ?").run(p, so, puzzleId);
+  }
+
+  // Set the exact pinned order from an ordered list of puzzle ids: those ids
+  // become the pinned puzzles (in the given order), everything else is unpinned.
+  reorderPinned(orderedIds) {
+    const unpinAll = this.db.prepare("UPDATE puzzles SET pinned = 0");
+    const pin = this.db.prepare("UPDATE puzzles SET pinned = 1, sort_order = ? WHERE id = ?");
+    const tx = this.db.prepare("BEGIN");
+    tx.run();
+    try {
+      unpinAll.run();
+      orderedIds.forEach((id, i) => pin.run(i + 1, id));
+      this.db.prepare("COMMIT").run();
+    } catch (e) {
+      this.db.prepare("ROLLBACK").run();
+      throw e;
+    }
   }
 
   /* --- attempts ------------------------------------------------------------ */
 
-  startAttempt(userId, level, puzzleId = null) {
+  startAttempt(userId, puzzleId) {
     const r = this.db
-      .prepare("INSERT INTO attempts (user_id, level, puzzle_id, outcome, started_at) VALUES (?, ?, ?, 'in_progress', ?)")
-      .run(userId, level, puzzleId, now());
+      .prepare("INSERT INTO attempts (user_id, puzzle_id, outcome, started_at) VALUES (?, ?, 'in_progress', ?)")
+      .run(userId, puzzleId, now());
     return Number(r.lastInsertRowid);
   }
 
@@ -344,56 +299,56 @@ export class Db {
     return r.changes > 0;
   }
 
-  userBest(userId, level) {
+  userBest(userId, puzzleId) {
     const r = this.db
-      .prepare("SELECT MIN(moves_used) AS best FROM attempts WHERE user_id = ? AND level = ? AND outcome = 'won'")
-      .get(userId, level);
+      .prepare("SELECT MIN(moves_used) AS best FROM attempts WHERE user_id = ? AND puzzle_id = ? AND outcome = 'won'")
+      .get(userId, puzzleId);
     return r && r.best != null ? r.best : null;
   }
 
-  worldBest(level) {
+  worldBest(puzzleId) {
     const r = this.db
-      .prepare("SELECT MIN(moves_used) AS best FROM attempts WHERE level = ? AND outcome = 'won'")
-      .get(level);
+      .prepare("SELECT MIN(moves_used) AS best FROM attempts WHERE puzzle_id = ? AND outcome = 'won'")
+      .get(puzzleId);
     return r && r.best != null ? r.best : null;
   }
 
-  solverCount(level) {
+  solverCount(puzzleId) {
     const r = this.db
-      .prepare("SELECT COUNT(DISTINCT user_id) AS n FROM attempts WHERE level = ? AND outcome = 'won'")
-      .get(level);
+      .prepare("SELECT COUNT(DISTINCT user_id) AS n FROM attempts WHERE puzzle_id = ? AND outcome = 'won'")
+      .get(puzzleId);
     return r ? r.n : 0;
   }
 
   /* --- aggregates: leaderboard, puzzle difficulty, player skill ------------ */
 
-  // Top scores for a level: each player's fewest moves, the time of that best
-  // run, and how many attempts they've made on the level.
-  leaderboard(level, limit = 10) {
+  // Top scores for a puzzle: each player's fewest moves, the time of that best
+  // run, and how many attempts they've made on the puzzle.
+  leaderboard(puzzleId, limit = 10) {
     return this.db.prepare(
       `WITH best AS (
          SELECT user_id, MIN(moves_used) AS best
-         FROM attempts WHERE level = ? AND outcome = 'won' GROUP BY user_id
+         FROM attempts WHERE puzzle_id = ? AND outcome = 'won' GROUP BY user_id
        ),
        best_run AS (              -- the specific winning run that hit that best
          SELECT a.user_id, a.duration_ms,
                 ROW_NUMBER() OVER (PARTITION BY a.user_id ORDER BY a.id) AS rn
          FROM attempts a JOIN best b ON a.user_id = b.user_id
-         WHERE a.level = ? AND a.outcome = 'won' AND a.moves_used = b.best
+         WHERE a.puzzle_id = ? AND a.outcome = 'won' AND a.moves_used = b.best
        )
        SELECT u.id AS user_id, u.username, b.best AS best,
               br.duration_ms AS durationMs,
-              (SELECT COUNT(*) FROM attempts a2 WHERE a2.level = ? AND a2.user_id = u.id) AS attempts
+              (SELECT COUNT(*) FROM attempts a2 WHERE a2.puzzle_id = ? AND a2.user_id = u.id) AS attempts
        FROM best b
        JOIN users u ON u.id = b.user_id
        LEFT JOIN best_run br ON br.user_id = b.user_id AND br.rn = 1
        ORDER BY b.best ASC, br.duration_ms ASC
        LIMIT ?`
-    ).all(level, level, level, limit);
+    ).all(puzzleId, puzzleId, puzzleId, limit);
   }
 
   // Difficulty signals for one puzzle, aggregated across everyone who tried it.
-  levelStats(level) {
+  puzzleStats(puzzleId) {
     const base = this.db.prepare(
       `SELECT
          COUNT(*)                                                  AS attempts,
@@ -403,44 +358,46 @@ export class Db {
          AVG(CASE WHEN outcome = 'won' THEN moves_used END)        AS avgMoves,
          MIN(CASE WHEN outcome = 'won' THEN moves_used END)        AS minMoves,
          AVG(CASE WHEN outcome = 'won' THEN duration_ms END)       AS avgDurationMs
-       FROM attempts WHERE level = ? AND outcome <> 'in_progress'`
-    ).get(level);
+       FROM attempts WHERE puzzle_id = ? AND outcome <> 'in_progress'`
+    ).get(puzzleId);
 
     const attempts = base.attempts || 0;
+    const winRate = attempts ? (base.winAttempts || 0) / attempts : 0;
     return {
       players: base.players || 0,
       attempts,
       solves: base.solves || 0,
-      winRate: attempts ? (base.winAttempts || 0) / attempts : 0,
+      winRate,
+      failRate: attempts ? 1 - winRate : 0,
       avgMoves: base.avgMoves ?? null,
       minMoves: base.minMoves ?? null,
       avgDurationMs: base.avgDurationMs ?? null,
       // How many tries it typically takes to crack / to optimise this puzzle.
-      avgAttemptsToSolve: this._avgAttemptsToReach(level, "first"),
-      avgAttemptsToBest: this._avgAttemptsToReach(level, "best"),
+      avgAttemptsToSolve: this._avgAttemptsToReach(puzzleId, "first"),
+      avgAttemptsToBest: this._avgAttemptsToReach(puzzleId, "best"),
     };
   }
 
   // Average over players of "attempts up to and including the run that first
   // solved (mode='first') or that achieved their personal best (mode='best')".
-  _avgAttemptsToReach(level, mode) {
+  _avgAttemptsToReach(puzzleId, mode) {
     const target =
       mode === "best"
         ? `SELECT a.user_id, MIN(a.id) AS target_id
              FROM attempts a
              JOIN (SELECT user_id, MIN(moves_used) AS bm FROM attempts
-                   WHERE level = ? AND outcome = 'won' GROUP BY user_id) b
+                   WHERE puzzle_id = ? AND outcome = 'won' GROUP BY user_id) b
                ON a.user_id = b.user_id AND a.moves_used = b.bm
-            WHERE a.level = ? AND a.outcome = 'won'
+            WHERE a.puzzle_id = ? AND a.outcome = 'won'
             GROUP BY a.user_id`
         : `SELECT user_id, MIN(id) AS target_id
-             FROM attempts WHERE level = ? AND outcome = 'won' GROUP BY user_id`;
-    const args = mode === "best" ? [level, level, level] : [level, level];
+             FROM attempts WHERE puzzle_id = ? AND outcome = 'won' GROUP BY user_id`;
+    const args = mode === "best" ? [puzzleId, puzzleId, puzzleId] : [puzzleId, puzzleId];
     const r = this.db.prepare(
       `WITH t AS (${target})
        SELECT AVG(cnt) AS avg FROM (
          SELECT (SELECT COUNT(*) FROM attempts a
-                 WHERE a.level = ? AND a.user_id = t.user_id AND a.id <= t.target_id) AS cnt
+                 WHERE a.puzzle_id = ? AND a.user_id = t.user_id AND a.id <= t.target_id) AS cnt
          FROM t)`
     ).get(...args);
     return r && r.avg != null ? r.avg : null;
@@ -454,13 +411,12 @@ export class Db {
          SUM(CASE WHEN outcome = 'won'       THEN 1 ELSE 0 END) AS wins,
          SUM(CASE WHEN outcome = 'lost'      THEN 1 ELSE 0 END) AS losses,
          SUM(CASE WHEN outcome = 'abandoned' THEN 1 ELSE 0 END) AS abandoned,
-         COUNT(DISTINCT CASE WHEN outcome = 'won' THEN level END) AS solved,
+         COUNT(DISTINCT CASE WHEN outcome = 'won' THEN puzzle_id END) AS solved,
          AVG(CASE WHEN outcome = 'won' THEN duration_ms END)      AS avgDurationMs
        FROM attempts WHERE user_id = ? AND outcome <> 'in_progress'`
     ).get(userId);
 
     // Average moves-over-best-known across winning runs (efficiency signal).
-    // Join via puzzles so the optimal reflects the puzzle content, not the slot.
     const over = this.db.prepare(
       `SELECT AVG(a.moves_used - p.optimal) AS d
          FROM attempts a JOIN puzzles p ON p.id = a.puzzle_id
@@ -480,61 +436,56 @@ export class Db {
     };
   }
 
-  // Assign a different puzzle to a level slot — the core reordering operation.
-  // The slot's play history (attempts) is unaffected; future plays get the new
-  // puzzle. Throws if puzzleId doesn't reference a known puzzle.
-  assignPuzzle(slot, puzzleId) {
-    const puzzle = this.db.prepare("SELECT id FROM puzzles WHERE id = ?").get(puzzleId);
-    if (!puzzle) throw new Error(`puzzle ${puzzleId} not found`);
-    const p = this.db.prepare("SELECT * FROM puzzles WHERE id = ?").get(puzzleId);
-    const row = this.db.prepare("SELECT * FROM levels WHERE level = ?").get(slot);
-    if (!row) {
-      this.db.prepare(
-        "INSERT INTO levels (level, puzzle_id, num_cubes, scramble, par, optimal, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-      ).run(slot, puzzleId, p.num_cubes, p.scramble, p.par, p.optimal, now());
-    } else {
-      this.db.prepare(
-        "UPDATE levels SET puzzle_id = ?, num_cubes = ?, scramble = ?, par = ?, optimal = ? WHERE level = ?"
-      ).run(puzzleId, p.num_cubes, p.scramble, p.par, p.optimal, slot);
-    }
-  }
+  /* --- the catalogue for the landing page ----------------------------------- */
 
-  // Pre-populate puzzle rows and level slots for 1..maxSlot so they can be
-  // reordered before anyone plays. Safe to call repeatedly (idempotent).
-  seedSlots(maxSlot) {
-    for (let slot = 1; slot <= maxSlot; slot++) {
-      const params = levelParams(slot);
-      const seed = hashLevelSeed(slot);
-      const par = baseBudget(slot);
-      const puzzleId = this.ensurePuzzle({ seed, ...params, par });
-      const row = this.db.prepare("SELECT puzzle_id FROM levels WHERE level = ?").get(slot);
-      if (!row) {
-        this.db.prepare(
-          "INSERT INTO levels (level, puzzle_id, num_cubes, scramble, par, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-        ).run(slot, puzzleId, params.numCubes, params.scramble, par, now());
-      } else if (!row.puzzle_id) {
-        this.db.prepare("UPDATE levels SET puzzle_id = ? WHERE level = ?").run(puzzleId, slot);
-      }
-    }
-  }
+  // Every puzzle with its metadata, difficulty signals and the caller's best.
+  // Pinned puzzles come first (in admin order); the client can re-sort the rest
+  // by any difficulty metric. One pass, no N+1: stats are joined in aggregate.
+  listPuzzles(userId) {
+    const rows = this.db.prepare(
+      `SELECT
+         p.id, p.name, p.seed, p.num_cubes, p.scramble, p.par, p.optimal,
+         p.pinned, p.sort_order,
+         (SELECT MIN(moves_used) FROM attempts a
+            WHERE a.puzzle_id = p.id AND a.outcome = 'won') AS world_best,
+         (SELECT COUNT(DISTINCT user_id) FROM attempts a
+            WHERE a.puzzle_id = p.id AND a.outcome = 'won') AS solvers,
+         (SELECT COUNT(*) FROM attempts a
+            WHERE a.puzzle_id = p.id AND a.outcome <> 'in_progress') AS attempts,
+         (SELECT SUM(CASE WHEN a.outcome = 'won' THEN 1 ELSE 0 END) FROM attempts a
+            WHERE a.puzzle_id = p.id AND a.outcome <> 'in_progress') AS win_attempts,
+         (SELECT AVG(CASE WHEN a.outcome = 'won' THEN moves_used END) FROM attempts a
+            WHERE a.puzzle_id = p.id) AS avg_moves
+       FROM puzzles p
+       ORDER BY p.pinned DESC, p.sort_order ASC, p.id ASC`
+    ).all();
 
-  // Level grid for the landing page: 1..count with your best + world best.
-  listLevels(userId, count) {
-    const out = [];
-    for (let level = 1; level <= count; level++) {
-      const meta = this.levelMeta(level);
-      out.push({
-        level,
-        puzzleId: meta.puzzleId,
-        seed: meta.seed,
-        numCubes: meta.numCubes,
-        par: meta.par,
-        optimal: meta.optimal,
-        yourBest: userId ? this.userBest(userId, level) : null,
-        worldBest: this.worldBest(level),
-        solvers: this.solverCount(level),
-      });
-    }
-    return out;
+    const bestStmt = userId
+      ? this.db.prepare("SELECT MIN(moves_used) AS best FROM attempts WHERE user_id = ? AND puzzle_id = ? AND outcome = 'won'")
+      : null;
+
+    return rows.map((r) => {
+      const attempts = r.attempts || 0;
+      const winRate = attempts ? (r.win_attempts || 0) / attempts : 0;
+      const yourBest = bestStmt ? (bestStmt.get(userId, r.id).best ?? null) : null;
+      return {
+        id: r.id,
+        name: r.name,
+        seed: r.seed,
+        numCubes: r.num_cubes,
+        scramble: r.scramble,
+        par: r.par,
+        optimal: r.optimal,
+        pinned: r.pinned === 1,
+        sortOrder: r.sort_order,
+        yourBest,
+        worldBest: r.world_best ?? null,
+        solvers: r.solvers || 0,
+        attempts,
+        winRate,
+        failRate: attempts ? 1 - winRate : 0,
+        avgMoves: r.avg_moves ?? null,
+      };
+    });
   }
 }

@@ -18,11 +18,11 @@
 
   <main class="landing">
     <section class="hero">
-      <h1>Pick a level</h1>
+      <h1>Pick a puzzle</h1>
       <p class="muted">
         Roll every cube to the <b>same colour</b> on top in one <b>connected block</b>,
-        under par. Each level is the <b>same puzzle for everyone</b> — so the best
-        score is a real record. Sign in with a name to land on the leaderboards.
+        under par. Every puzzle is the <b>same for everyone</b> — so the best score is
+        a real record. Sort by difficulty and sign in to land on the leaderboards.
       </p>
       <div id="offline" class="offline hidden">
         Offline — your scores are saved in this browser only. Run the server
@@ -35,11 +35,16 @@
 
     <section class="levels">
       <div class="levels-head">
-        <h2>Levels</h2>
+        <h2>Puzzles</h2>
         <label class="count muted">
-          Show
-          <input id="levelCount" type="number" min="6" max="60" step="6" value="12" />
-          levels
+          Sort by
+          <select id="sortBy">
+            <option value="featured">Featured</option>
+            <option value="fail">Hardest — failure rate</option>
+            <option value="over">Hardest — moves over scramble</option>
+            <option value="cubes">Most cubes</option>
+            <option value="name">Name</option>
+          </select>
         </label>
       </div>
       <div id="grid" class="grid" aria-live="polite"></div>

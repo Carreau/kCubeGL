@@ -89,21 +89,22 @@ export async function me() {
 
 export function myStats() { return tryReq("GET", "/me/stats"); }
 
-/* --- Levels ----------------------------------------------------------------- */
+/* --- Puzzles ---------------------------------------------------------------- */
 
-// Level grid for the landing page: metadata + your best + world best per level.
-export function listLevels(count = 12) { return tryReq("GET", `/levels?count=${count}`); }
+// The whole catalogue for the landing page: per-puzzle metadata, difficulty
+// signals (winRate/failRate, avgMoves…), your best + world best.
+export function listPuzzles() { return tryReq("GET", "/puzzles"); }
 
-// One level's detail: metadata, leaderboard, difficulty stats, your best.
-export function getLevel(level) { return tryReq("GET", `/levels/${level}`); }
+// One puzzle's detail: metadata, leaderboard, difficulty stats, your best.
+export function getPuzzle(name) { return tryReq("GET", `/puzzles/${encodeURIComponent(name)}`); }
 
 /* --- Attempts --------------------------------------------------------------- */
 
-// Record that the player has started a fresh attempt at a level. The client
-// supplies the (deterministic) metadata so the server can register an unplayed
-// level without running the game engine. Returns { attemptId } or null offline.
-export function startAttempt({ level, numCubes, par, optimal }) {
-  return tryReq("POST", "/attempts", { level, numCubes, par, optimal });
+// Record that the player has started a fresh attempt at a puzzle (by name).
+// `optimal` lets the client report a shortest-known solve. Returns { attemptId }
+// or null offline.
+export function startAttempt({ puzzle, optimal }) {
+  return tryReq("POST", "/attempts", { puzzle, optimal });
 }
 
 // Finalise an attempt with its outcome and score. `moveSeq` is the player's
@@ -154,4 +155,17 @@ export async function adminUpdateUser(id, data) {
 
 export async function adminDeleteUser(id) {
   return request('DELETE', `/admin/users/${id}`, {});
+}
+
+export function adminListPuzzles() {
+  return tryReq('GET', '/admin/puzzles');
+}
+
+// Set the exact pinned order (and which puzzles are pinned) from a list of ids.
+export async function adminReorderPuzzles(ids) {
+  return request('PUT', '/admin/puzzles/order', { ids });
+}
+
+export async function adminUpdatePuzzle(id, data) {
+  return request('PATCH', `/admin/puzzles/${id}`, data);
 }
