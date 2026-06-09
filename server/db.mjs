@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS puzzles (
   sort_order  INTEGER NOT NULL DEFAULT 0,-- admin ordering among pinned puzzles
   full_optimal INTEGER,                  -- full solver (BFS) optimal roll count
   beam_moves   INTEGER,                  -- beam-search approximate roll count
+  min_beam_width INTEGER,                -- min beam width to solve (search-effort difficulty guide)
   solved_at    INTEGER,                  -- when the solver was last run (null = never)
   created_at  INTEGER NOT NULL DEFAULT (unixepoch())
 );
@@ -104,6 +105,7 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   // Migrations for DBs created before these columns existed.
   ensureColumn(db, "puzzles", "full_optimal", "INTEGER");
   ensureColumn(db, "puzzles", "beam_moves", "INTEGER");
+  ensureColumn(db, "puzzles", "min_beam_width", "INTEGER");
   ensureColumn(db, "puzzles", "solved_at", "INTEGER");
   const wrapped = new Db(db);
   wrapped.seedCatalog();
@@ -270,8 +272,10 @@ export class Db {
   // Run the solvers (full/BFS + beam) for one puzzle and persist the results.
   // This is an explicit, admin-triggered step: reproducing the board and running
   // BFS can take a few seconds on the hardest boards, so we never do it at boot.
-  // Returns the stored difficulty signals. `fullOptimal`/`beamMoves` are null
-  // when that solver found no solution within its search budget.
+  // Returns the stored difficulty signals. `fullOptimal`/`beamMoves`/
+  // `minBeamWidth` are null when the corresponding solver found no solution
+  // within its budget. `minBeamWidth` is the search-effort difficulty guide:
+  // the smallest beam width that solves the board (1 ≈ no planning needed).
   solvePuzzle(puzzleId) {
     const row = this.puzzleById(puzzleId);
     if (!row) throw new Error(`puzzle ${puzzleId} not found`);
@@ -280,9 +284,12 @@ export class Db {
     });
     const ts = now();
     this.db.prepare(
-      "UPDATE puzzles SET full_optimal = ?, beam_moves = ?, solved_at = ? WHERE id = ?"
-    ).run(r.bfs ?? null, r.beam ?? null, ts, puzzleId);
-    return { fullOptimal: r.bfs ?? null, beamMoves: r.beam ?? null, solvedAt: ts };
+      "UPDATE puzzles SET full_optimal = ?, beam_moves = ?, min_beam_width = ?, solved_at = ? WHERE id = ?"
+    ).run(r.bfs ?? null, r.beam ?? null, r.searchWidth ?? null, ts, puzzleId);
+    return {
+      fullOptimal: r.bfs ?? null, beamMoves: r.beam ?? null,
+      minBeamWidth: r.searchWidth ?? null, solvedAt: ts,
+    };
   }
 
   /* --- admin: puzzle ordering ------------------------------------------------- */
@@ -480,7 +487,7 @@ export class Db {
     const rows = this.db.prepare(
       `SELECT
          p.id, p.name, p.seed, p.num_cubes, p.scramble, p.par, p.optimal,
-         p.pinned, p.sort_order, p.full_optimal, p.beam_moves, p.solved_at,
+         p.pinned, p.sort_order, p.full_optimal, p.beam_moves, p.min_beam_width, p.solved_at,
          (SELECT MIN(moves_used) FROM attempts a
             WHERE a.puzzle_id = p.id AND a.outcome = 'won') AS world_best,
          (SELECT COUNT(DISTINCT user_id) FROM attempts a
@@ -522,8 +529,9 @@ export class Db {
         avgMoves: r.avg_moves ?? null,
         // Solver difficulty signals — populated by the admin-triggered solver run
         // (db.solvePuzzle). solvedAt is null until the solver has been run.
-        fullOptimal: r.full_optimal ?? null, // full solver: provably-optimal roll count
-        beamMoves: r.beam_moves ?? null,     // beam-search approximate roll count
+        fullOptimal: r.full_optimal ?? null,   // full solver: provably-optimal roll count
+        beamMoves: r.beam_moves ?? null,       // beam-search approximate roll count
+        minBeamWidth: r.min_beam_width ?? null, // min beam width to solve (search-effort guide)
         solvedAt: r.solved_at ?? null,
       };
     });

@@ -144,6 +144,54 @@ giving each board up to 6 extra mini-challenges.
 5. Landing-page per-colour bests in the detail dialog.
 6. Admin solver per-colour baselines (last; heaviest, fully optional).
 
+## Difficulty Modeling (solver-based)
+
+The goal is a **difficulty guide for ordering/pinning** that reflects how hard a
+puzzle is *for a human to play*, not just its optimal length. Optimal length
+measures the puzzle; difficulty is about how hard a bounded-rationality player
+has to work to find a good-enough solution. Computed by the explicit, admin-
+triggered solver run (`POST /api/admin/puzzles/:id/solve` → `src/catalog-solve.mjs`),
+which reproduces the exact board without Three.js and runs the pure solvers in
+`src/solver.mjs`. Values persist on `puzzles` and show in the admin panel.
+
+### Implemented
+- ✅ **Full solver (BFS-optimal)** — `bfsSolve`; the provably-shortest roll count
+  (null on the hardest boards, where it exceeds its node budget).
+- ✅ **Beam approximate** — `beamSolve`; a tight upper bound that solves boards
+  plain greedy gets stuck on (greedy alone solved 11/40; beam solves 40/40).
+- ✅ **Search-effort guide (#1)** — `minBeamWidthToSolve`: the *minimum beam width*
+  at which the bounded-rationality beam first solves the board. width 1 ≈ no
+  planning (easy); a wide beam means the obvious moves keep dead-ending, so a
+  human must plan far ahead (hard). Across the catalogue it spreads cleanly
+  (width 1→32) and surfaces what optimal length misses — e.g. boards that are
+  easy to *find* a solution for but whose greedy path blows the move budget.
+
+### Roadmap
+- [ ] **Friction-weighted cost model (#2)** — a weighted A*/beam where each move's
+  cost reflects cognitive effort, so the solver's path is closer to careful human
+  play and its total "effort" is the difficulty score. Frictions to encode (also
+  the things that make *this* game hard):
+  - **Color ambiguity** — penalty when two colours tie for the majority target.
+  - **Herding distance** — Σ taxicab distance of cubes to their cluster centroid;
+    the cursor-can't-jump-islands rule makes scattered cubes brutal for humans.
+  - **Connectivity fragility** — count **articulation points** of the island
+    graph; rolling a cut-vertex cube fractures the group and can strand the
+    cursor (the classic human failure mode here).
+  - **Orientation–position coupling** — penalty when a cube's shortest reorient
+    sequence fights its travel path (you can't spin in place).
+  - **"Don't disturb solved cubes"** — penalty for rolling a cube already on
+    target; a puzzle that *requires* it feels much harder than its length.
+- [ ] **Empirical calibration (#3)** — the real signal is observed fail rate /
+  avg attempts-to-solve from the `attempts` table. Use the model scores above as
+  a **cold-start prior** for fresh puzzles, then blend toward the empirical fail
+  rate as plays accumulate. Validate any heuristic by correlating it with real
+  fail rate, and mine `move_seq` to see which frictions actually trip people up.
+
+### Notes
+- Solving the full catalogue is slow (several minutes; the 15-cube boards are
+  ~10s each because BFS exhausts its node budget). It's explicit and on-demand,
+  run per-puzzle or batched with progress — never at boot.
+
 ## Architectural Considerations
 
 ### Current Strengths

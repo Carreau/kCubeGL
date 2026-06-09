@@ -43,7 +43,7 @@ try {
   const cat = (await call("GET", "/puzzles")).body;
   ok(Array.isArray(cat) && cat.length >= 40, "catalogue has the full pool");
   ok(cat.every((p) => typeof p.name === "string" && p.par > 0), "every puzzle has a name + par");
-  ok(cat.every((p) => "fullOptimal" in p && "beamMoves" in p && "solvedAt" in p), "every puzzle carries solver difficulty fields");
+  ok(cat.every((p) => "fullOptimal" in p && "beamMoves" in p && "minBeamWidth" in p && "solvedAt" in p), "every puzzle carries solver difficulty fields");
   ok(cat.every((p) => p.solvedAt == null), "solver values unset until the solver is run");
   eq(cat[0].yourBest, null, "yourBest null when unauth");
   const P0 = cat[0].name, P1 = cat[1].name, P2 = cat[2].name, P3 = cat[3].name;
@@ -152,8 +152,9 @@ try {
   const solved = (await call("POST", `/admin/puzzles/${easy.id}/solve`, { token: tokenA })).body;
   ok(solved.solvedAt > 0, "solve stamps solvedAt");
   ok(typeof solved.beamMoves === "number", "beam solver found a solution");
+  ok(typeof solved.minBeamWidth === "number" && solved.minBeamWidth >= 1, "min beam width computed");
   const reloaded = (await call("GET", "/admin/puzzles", { token: tokenA })).body.find((p) => p.id === easy.id);
-  ok(reloaded.solvedAt > 0 && reloaded.beamMoves === solved.beamMoves, "solver values persisted to the catalogue");
+  ok(reloaded.solvedAt > 0 && reloaded.beamMoves === solved.beamMoves && reloaded.minBeamWidth === solved.minBeamWidth, "solver values persisted to the catalogue");
 } catch (e) {
   fails.push("threw: " + (e && e.stack ? e.stack : e));
   console.error(e);
