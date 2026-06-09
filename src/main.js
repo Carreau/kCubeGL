@@ -242,17 +242,33 @@ for (let r = 0; r < BOARD; r++) {
   }
 }
 
-// Floating down-pointing arrow that marks the selected cube.
+// Asymmetric tetrahedron cursor: tip points toward world -Z (= ArrowUp/"north").
+// rotation.y is never updated, so as the camera orbits the tetrahedron pivots in
+// screen space, always showing the player where the Up key sends the cube.
 const cursor = new THREE.Group();
 {
   const mat = new THREE.MeshStandardMaterial({
     color: 0x6ee7ff, emissive: 0x2a6f88, roughness: 0.3, metalness: 0.2,
+    flatShading: true,
   });
-  const head = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.3, 22), mat);
-  head.rotation.x = Math.PI; // tip points down toward the cube
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.26, 16), mat);
-  shaft.position.y = 0.27;
-  cursor.add(head, shaft);
+  // Vertices — all in cursor-local space (Y up, tip faces -Z = world north):
+  //   t  = north tip   bl = back-left   br = back-right   dn = downward spike
+  const t  = [0, 0.08, -0.40];
+  const bl = [-0.17, 0.04,  0.18];
+  const br = [ 0.17, 0.04,  0.18];
+  const dn = [0, -0.38,  0];
+  // Four faces, wound counter-clockwise from outside → outward normals for flatShading:
+  //   top (visible from above), right, left, back.
+  const verts = new Float32Array([
+    ...t, ...bl, ...br,
+    ...t, ...br, ...dn,
+    ...t, ...dn, ...bl,
+    ...bl, ...dn, ...br,
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  geo.computeVertexNormals();
+  cursor.add(new THREE.Mesh(geo, mat));
 }
 scene.add(cursor);
 
@@ -928,8 +944,7 @@ function loop(now) {
     applyCamera();
   }
 
-  // animate cursor: spin + bob
-  cursor.rotation.y += dt * 0.003;
+  // cursor bobs; rotation.y stays 0 so the north tip always points world -Z
   cursor.position.y = S + 0.55 + Math.sin(now * 0.004) * 0.07;
 
   renderer.render(scene, camera);
