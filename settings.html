@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>kCube — Settings</title>
+  <link rel="stylesheet" href="src/styles.css" />
+</head>
+<body class="auth-page">
+  <header class="site-head">
+    <div class="brand">
+      <a href="index.html" class="logo-link"><span class="logo">kCube</span></a>
+      <span class="tag">roll-to-match puzzle</span>
+    </div>
+  </header>
+
+  <main class="auth-main">
+    <div class="auth-card">
+      <h1>Settings</h1>
+
+      <div id="avatarPreview" class="settings-avatar-row"></div>
+
+      <section class="settings-section">
+        <h2>Gravatar</h2>
+        <p class="muted settings-note">
+          Enter your email to load your
+          <a href="https://gravatar.com" target="_blank" rel="noopener" class="accent-link">Gravatar</a>
+          avatar. Your email is <strong>never stored</strong> — only an anonymous
+          one-way hash is kept to fetch the image.
+        </p>
+        <form id="gravatarForm">
+          <div class="field">
+            <label for="emailInput">Email address</label>
+            <input id="emailInput" type="email" placeholder="you@example.com"
+              maxlength="254" autocomplete="email" autocorrect="off"
+              autocapitalize="off" spellcheck="false" />
+          </div>
+          <div class="settings-actions">
+            <button type="submit" class="primary" id="saveBtn">Save</button>
+            <button type="button" class="link-btn" id="clearBtn">Remove avatar</button>
+          </div>
+          <p id="formMsg" class="auth-status hidden"></p>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script type="module" src="src/settings.mjs"></script>
+</body>
+</html>

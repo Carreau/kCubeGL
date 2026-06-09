@@ -124,7 +124,6 @@ function toggleAdminMode() {
 async function doRegister(e) {
   e.preventDefault();
   const name = $('usernameInput').value.trim();
-  const email = $('emailInput').value.trim();
   const errEl = $('registerErr');
   errEl.classList.add('hidden');
   if (!name) { errEl.textContent = 'Enter a username.'; errEl.classList.remove('hidden'); return; }
@@ -138,7 +137,7 @@ async function doRegister(e) {
 
   $('registerBtn').disabled = true;
   try {
-    await api.createUser(name, { email: email || undefined, adminToken: adminToken || undefined });
+    await api.createUser(name, { adminToken: adminToken || undefined });
     // The account now exists and api.createUser() has stored its session token,
     // so the player is already signed in. Only offer the passkey step when it
     // can actually work; on a dev server without a secure context we'd just be
