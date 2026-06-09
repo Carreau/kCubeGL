@@ -442,17 +442,40 @@ table.lb .avatar { margin-right: 6px; }
 .chip .v { color: var(--ink); font-size: 18px; font-weight: 700; }
 
 .levels { margin-top: 34px; }
-.levels-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.count select {
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  color: var(--ink);
-  border-radius: 8px;
-  padding: 4px 8px;
-  font-size: 13px;
+.levels-head { margin-bottom: 16px; }
+
+.sort-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
-.count select { cursor: pointer; }
-.count select option { background: #14161c; color: var(--ink); }
+.sort-chip {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-size: 12px;
+  font-family: inherit;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.sort-chip:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--ink);
+}
+.sort-chip.active {
+  background: rgba(110, 231, 255, 0.12);
+  border-color: rgba(110, 231, 255, 0.4);
+  color: var(--accent);
+  font-weight: 600;
+}
+.sort-chip.active:hover { background: rgba(110, 231, 255, 0.18); }
+.sort-chip .sort-dir { font-size: 11px; margin-left: 2px; }
+.sort-chip:not(.active) .sort-dir { display: none; }
 
 .grid {
   display: grid;
