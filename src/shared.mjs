@@ -190,11 +190,23 @@ export function md5(str) {
   return hex(a0) + hex(b0) + hex(c0) + hex(d0);
 }
 
-/* Build a Gravatar avatar URL for an identifier (a username or an email).
+/* The Gravatar hash for an identifier: the trimmed, lowercased value (an email
+ * or, for us, a username) run through MD5. This is exactly the public key a
+ * Gravatar URL embeds, so it's safe to expose even when the raw email isn't. */
+export function gravatarHash(identifier) {
+  return md5(String(identifier ?? "").trim().toLowerCase());
+}
+
+/* Build a Gravatar avatar URL from an already-computed hash (see gravatarHash).
  * Options: `size` (px), `def` (default-image style for unknown hashes, e.g.
  * "retro", "identicon", "mp"), and `rating`. */
-export function gravatarUrl(identifier, { size = 80, def = "retro", rating = "g" } = {}) {
-  const hash = md5(String(identifier ?? "").trim().toLowerCase());
+export function gravatarUrlForHash(hash, { size = 80, def = "retro", rating = "g" } = {}) {
   const q = `s=${encodeURIComponent(size)}&d=${encodeURIComponent(def)}&r=${encodeURIComponent(rating)}`;
   return `https://www.gravatar.com/avatar/${hash}?${q}`;
+}
+
+/* Build a Gravatar avatar URL for an identifier (a username or an email).
+ * Convenience wrapper around gravatarHash + gravatarUrlForHash. */
+export function gravatarUrl(identifier, opts) {
+  return gravatarUrlForHash(gravatarHash(identifier), opts);
 }

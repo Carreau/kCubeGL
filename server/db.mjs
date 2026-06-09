@@ -24,7 +24,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
-import { buildCatalog } from "../src/shared.mjs";
+import { buildCatalog, gravatarHash } from "../src/shared.mjs";
 import { solveCatalogPuzzle } from "../src/catalog-solve.mjs";
 
 const SCHEMA = `
@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS users (
   username_lower TEXT NOT NULL UNIQUE,   -- case-insensitive uniqueness
   token          TEXT NOT NULL UNIQUE,   -- bearer token (this app's only secret)
   created_at     INTEGER NOT NULL,
-  is_admin       INTEGER NOT NULL DEFAULT 0
+  is_admin       INTEGER NOT NULL DEFAULT 0,
+  -- Gravatar hash derived from the player's email. We hash the email and keep
+  -- ONLY the hash (never the raw address); non-null means an email was supplied.
+  avatar_hash    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS passkeys (
@@ -112,18 +115,20 @@ export class Db {
 
   /* --- users --------------------------------------------------------------- */
 
-  // Register a username, returning { id, username, token, isAdmin }. Throws an
-  // Error with .code === "DUP" if the name (case-insensitively) is taken.
-  // Admin is granted only when the caller proves the bootstrap secret
-  // (KCUBE_ADMIN_TOKEN) — see the POST /api/users route. Never "first user wins".
-  createUser(username, { admin = false } = {}) {
+  // Register a username, returning { id, username, token, isAdmin, avatarHash }.
+  // An optional email links a real Gravatar — we hash it and store ONLY the hash
+  // (never the raw address). Throws an Error with .code === "DUP" if the name
+  // (case-insensitively) is taken. Admin is granted only when the caller proves
+  // the bootstrap secret (KCUBE_ADMIN_TOKEN) — see the POST /api/users route.
+  createUser(username, { admin = false, email = null } = {}) {
     const token = randomBytes(24).toString("base64url");
     const isAdmin = admin ? 1 : 0;
+    const hash = email ? gravatarHash(email) : null;
     try {
       const r = this.db
-        .prepare("INSERT INTO users (username, username_lower, token, created_at, is_admin) VALUES (?, ?, ?, ?, ?)")
-        .run(username, username.toLowerCase(), token, now(), isAdmin);
-      return { id: Number(r.lastInsertRowid), username, token, isAdmin: isAdmin === 1 };
+        .prepare("INSERT INTO users (username, username_lower, token, created_at, is_admin, avatar_hash) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(username, username.toLowerCase(), token, now(), isAdmin, hash);
+      return { id: Number(r.lastInsertRowid), username, token, isAdmin: isAdmin === 1, avatarHash: hash };
     } catch (e) {
       if (/UNIQUE/i.test(String(e && e.message))) {
         const err = new Error("username taken");
@@ -136,9 +141,18 @@ export class Db {
 
   userByToken(token) {
     if (!token) return null;
-    const row = this.db.prepare("SELECT id, username, is_admin FROM users WHERE token = ?").get(token);
+    const row = this.db.prepare("SELECT id, username, is_admin, avatar_hash FROM users WHERE token = ?").get(token);
     if (!row) return null;
-    return { id: row.id, username: row.username, isAdmin: row.is_admin === 1 };
+    return { id: row.id, username: row.username, isAdmin: row.is_admin === 1, avatarHash: row.avatar_hash ?? null };
+  }
+
+  // Set (or clear, with null/empty) a user's Gravatar by email. We hash the
+  // email and store ONLY the hash — the raw address is never persisted.
+  // Returns the stored { avatarHash }.
+  setUserEmail(userId, email) {
+    const hash = email ? gravatarHash(email) : null;
+    this.db.prepare("UPDATE users SET avatar_hash = ? WHERE id = ?").run(hash, userId);
+    return { avatarHash: hash };
   }
 
   // Returns full user info including token (for passkey login).
@@ -363,7 +377,7 @@ export class Db {
          FROM attempts a JOIN best b ON a.user_id = b.user_id
          WHERE a.puzzle_id = ? AND a.outcome = 'won' AND a.moves_used = b.best
        )
-       SELECT u.id AS user_id, u.username, b.best AS best,
+       SELECT u.id AS user_id, u.username, u.avatar_hash AS avatarHash, b.best AS best,
               br.duration_ms AS durationMs,
               (SELECT COUNT(*) FROM attempts a2 WHERE a2.puzzle_id = ? AND a2.user_id = u.id) AS attempts
        FROM best b

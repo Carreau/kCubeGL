@@ -275,6 +275,7 @@ html, body {
 }
 #topbar .who { color: var(--muted); }
 #topbar .who b { color: var(--accent); }
+#topbar .who .avatar { margin: 0 3px -4px; }
 
 .link-btn {
   appearance: none;

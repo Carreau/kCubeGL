@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { buildCatalog, catalogByName } from "./shared.mjs";
+import { buildCatalog, catalogByName, gravatarUrl, gravatarUrlForHash } from "./shared.mjs";
 import {
   generateLevel, quatToFaces, cellsConnected, OPPOSITE, NEI,
   DIRS as GEN_DIRS, FACE_AXES as GEN_FACE_AXES,
@@ -324,6 +324,7 @@ const el = {
   best: document.getElementById("info-best"),
   world: document.getElementById("info-world"), // world-best badge (backend only)
   user: document.getElementById("user"), // "playing as" label (backend only)
+  userAvatar: document.getElementById("userAvatar"), // HUD Gravatar (backend only)
   overlay: document.getElementById("overlay"),
   title: document.getElementById("overlay-title"),
   body: document.getElementById("overlay-body"),
@@ -703,11 +704,23 @@ function hideOverlay() {
  * is briefly unreachable they quietly no-op and the game keeps running.
  * ------------------------------------------------------------------------- */
 
-// Resolve the stored token to a username for the HUD ("playing as …").
+// Resolve the stored token to a username (and Gravatar) for the HUD.
 async function refreshIdentity() {
   const who = await api.me();
   game.username = who && who.username ? who.username : null;
   if (el.user) el.user.textContent = game.username ? "@" + game.username : "guest";
+  if (el.userAvatar) {
+    if (game.username) {
+      // A linked email gives a real Gravatar; otherwise hash the username so
+      // every signed-in player still gets a stable generated icon.
+      el.userAvatar.src = who.avatarHash
+        ? gravatarUrlForHash(who.avatarHash, { size: 36 })
+        : gravatarUrl(game.username, { size: 36 });
+      el.userAvatar.hidden = false;
+    } else {
+      el.userAvatar.hidden = true;
+    }
+  }
 }
 
 // Open a new attempt for the current board and refresh the world-record badge.
