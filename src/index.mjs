@@ -134,14 +134,29 @@ function cachedCatalog() {
 }
 
 // Comparators for each sort key. Nulls always sort last for "harder = higher".
+const nullLast = (v) => (v == null ? -Infinity : v);
+
+// Nulls-last descending comparison with a tiebreaker.
+function nullLastDesc(av, bv, ...tiebreakers) {
+  if (av === null && bv === null) return tiebreakers.reduce((r, f) => r || f(), 0);
+  if (av === null) return 1;
+  if (bv === null) return -1;
+  return bv - av || tiebreakers.reduce((r, f) => r || f(), 0);
+}
+
 const SORTS = {
   featured: null, // keep server/catalogue order (pinned first)
   fail: (a, b) => (b.failRate || 0) - (a.failRate || 0) || a.name.localeCompare(b.name),
   over: (a, b) => nullLast(overScramble(b)) - nullLast(overScramble(a)) || a.name.localeCompare(b.name),
+  effort: (a, b) => nullLastDesc(
+    a.minBeamWidth ?? null, b.minBeamWidth ?? null,
+    () => b.scramble - a.scramble,
+    () => a.name.localeCompare(b.name)
+  ),
+  scramble: (a, b) => b.scramble - a.scramble || a.name.localeCompare(b.name),
   cubes: (a, b) => b.numCubes - a.numCubes || a.name.localeCompare(b.name),
   name: (a, b) => a.name.localeCompare(b.name),
 };
-const nullLast = (v) => (v == null ? -Infinity : v);
 
 async function loadGrid() {
   let puzzles = state.online ? await api.listPuzzles() : null;
