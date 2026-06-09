@@ -218,6 +218,32 @@ export function beamSolve(initialState, { width = 300, maxDepth = 80 } = {}) {
   return null;
 }
 
+/* --- Search-effort difficulty signal ------------------------------------------ */
+
+// The default ladder of beam widths probed by minBeamWidthToSolve. Geometric, so
+// it covers "no planning" (1) through "lots of search" (512) in a few steps.
+const WIDTH_LADDER = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
+
+// Minimum search effort to solve a board: the smallest beam width at which the
+// best-first beam (our bounded-rationality "human-ish" solver) first finds ANY
+// solution. Width 1 ≈ pure greedy / no planning (easy); needing a wide beam means
+// the obvious moves keep leading to dead ends, so a human must plan far ahead
+// (hard). A cleaner difficulty guide than optimal length, which measures the
+// puzzle, not the effort to play it.
+//
+// Returns { width, moves } for the first width that solves (moves = that beam's
+// solution length), or null if even the widest beam tried found nothing. Beam
+// solvability is near-monotone in width, so we scan the ladder low→high and stop
+// at the first hit.
+export function minBeamWidthToSolve(initialState, { ladder = WIDTH_LADDER, maxDepth = 80 } = {}) {
+  if (isWon(initialState)) return { width: 0, moves: 0 };
+  for (const width of ladder) {
+    const sol = beamSolve(initialState, { width, maxDepth });
+    if (sol) return { width, moves: sol.length };
+  }
+  return null;
+}
+
 /* --- Helpers shared by greedy ------------------------------------------------ */
 
 // BFS over the 24 discrete cube orientations. With only 4 roll directions the

@@ -10,7 +10,7 @@
  * ========================================================================== */
 
 import { generateLevel, quatToFaces } from "./level-gen.mjs";
-import { bfsSolve, beamSolve } from "./solver.mjs";
+import { bfsSolve, beamSolve, minBeamWidthToSolve } from "./solver.mjs";
 
 // Reproduce a catalogue puzzle's scrambled start as a pure solver state.
 // Returns { state, solutionLen } where solutionLen is the stored
@@ -26,17 +26,26 @@ export function buildCatalogState(config) {
   };
 }
 
-// Compute difficulty signals for a catalogue puzzle: the stored scramble-reverse
-// solution length, the BFS-optimal roll count (the "full solver" — null if no
-// solution was found within budget), and the beam-search approximate roll count
-// (a tight upper bound that solves boards plain greedy gets stuck on).
+// Compute difficulty signals for a catalogue puzzle:
+//   • optimal     — the stored scramble-reverse solution length.
+//   • bfs         — the BFS-optimal roll count (the "full solver"; null if it
+//                   found no solution within budget).
+//   • beam        — the beam-search approximate roll count (a tight upper bound
+//                   that solves boards plain greedy gets stuck on).
+//   • searchWidth — the minimum beam width at which the bounded-rationality
+//                   beam first solves the board: a "how much planning a human
+//                   needs" difficulty guide. 1 ≈ no planning (easy); a wide beam
+//                   means the obvious moves keep dead-ending (hard). null if even
+//                   the widest beam tried found nothing.
 export function solveCatalogPuzzle(config, opts = {}) {
   const { state, solutionLen } = buildCatalogState(config);
   const bfs = bfsSolve(state, opts.bfs);
   const beam = beamSolve(state, opts.beam);
+  const effort = minBeamWidthToSolve(state, opts.effort);
   return {
     optimal: solutionLen,
     bfs: bfs ? bfs.length : null,
     beam: beam ? beam.length : null,
+    searchWidth: effort ? effort.width : null,
   };
 }

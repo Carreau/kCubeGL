@@ -145,8 +145,7 @@ function cardHtml(p) {
       `<div class="card-top"><span class="lvl">${esc(p.name)}</span>` +
       (p.pinned ? `<span class="pin-badge" title="featured">★</span>` : "") +
       `<span class="dot" title="${solved ? "solved" : "unsolved"}"></span></div>` +
-      `<div class="card-mid muted">${p.numCubes} cubes · par ${p.par}` +
-      (p.optimal ? ` · best-known ${p.optimal}` : "") + `</div>` +
+      `<div class="card-mid muted">${p.numCubes} cubes · par ${p.par}</div>` +
       `<div class="card-stats">` +
         `<span>you <b>${dash(p.yourBest)}</b></span>` +
         `<span>world <b>${dash(p.worldBest)}</b></span>` +
@@ -240,7 +239,6 @@ async function openDetail(name) {
     ["Failure rate", st.attempts ? pct(st.failRate) : "–"],
     ["Scramble length", dash(info.scramble)],
     ["World best", dash(info.worldBest)],
-    ["Best-known", dash(info.optimal)],
     ["Avg winning moves", st.avgMoves == null ? "–" : st.avgMoves.toFixed(1)],
     ["Avg attempts to first solve", st.avgAttemptsToSolve == null ? "–" : st.avgAttemptsToSolve.toFixed(1)],
     ["Avg attempts to personal best", st.avgAttemptsToBest == null ? "–" : st.avgAttemptsToBest.toFixed(1)],

@@ -654,6 +654,7 @@ body.auth-page {
 /* Solver difficulty signals shown in each admin row. */
 .solver-meta { color: var(--accent, #7aa2ff); }
 .solver-meta.unsolved { color: var(--muted); }
+.solver-meta.effort { color: #ffb454; font-weight: 600; } /* search-effort difficulty guide */
 
 /* Solver run toolbar. */
 .solver-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
