@@ -64,6 +64,21 @@ const KEY_CODE = {
   ArrowRight: "R", ArrowLeft: "L", ArrowUp: "U", ArrowDown: "D",
 };
 
+// Arrow-key order for remapping (CW: Up→Right→Down→Left).
+const ARROW_CW = ["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"];
+
+// When the camera has orbited, remap a physical arrow key to the board direction
+// that matches the player's visual "forward/right/back/left". Uses camYawTarget
+// so the mapping snaps the moment Q/E is pressed, before the camera animation
+// finishes. A quarter-turn CW rotation of the camera shifts the logical key one
+// step CCW in the [Up, Right, Down, Left] cycle.
+function remapArrowKey(key) {
+  const idx = ARROW_CW.indexOf(key);
+  if (idx === -1) return key;
+  const rot = (Math.round(camYawTarget / (Math.PI / 2)) % 4 + 4) % 4;
+  return ARROW_CW[(idx + 4 - rot) % 4];
+}
+
 /* --- Helpers ---------------------------------------------------------------- */
 
 // Level generation lives in src/level-gen.mjs (the pure, shared source of truth
@@ -900,7 +915,7 @@ window.addEventListener("keydown", (e) => {
 
   if (DIRS[e.key]) {
     e.preventDefault();
-    if (game.state === "playing") tryMove(e.key);
+    if (game.state === "playing") tryMove(remapArrowKey(e.key));
     return;
   }
 
