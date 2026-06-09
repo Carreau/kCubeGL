@@ -74,10 +74,14 @@ export async function probe() {
   return ok !== null;
 }
 
-// Register a username (and optional Gravatar email) and store the returned
-// token. Throws ApiError so the caller can react to 409 (name taken) / offline.
-export async function createUser(username, email) {
-  const data = await request("POST", "/users", { username, email });
+// Register a username and store the returned token. Throws ApiError so the
+// caller can react to 409 (name taken) / offline.
+// Pass adminToken to claim admin rights when KCUBE_ADMIN_TOKEN matches.
+export async function createUser(username, { email, adminToken } = {}) {
+  const body = { username };
+  if (email) body.email = email;
+  if (adminToken) body.adminToken = adminToken;
+  const data = await request("POST", "/users", body);
   if (data && data.token) setToken(data.token);
   return data;
 }

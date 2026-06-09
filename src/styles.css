@@ -602,6 +602,10 @@ body.auth-page {
 #addPasskeyArea { display: flex; flex-direction: column; gap: 10px; }
 #addPasskeyArea .passkey-btn { margin-bottom: 0; }
 
+.auth-admin-toggle { margin: 12px 0 0; text-align: center; font-size: 12px; }
+.auth-admin-toggle .link-btn { font-size: 12px; padding: 4px 10px; color: var(--muted); }
+#adminTokenArea { margin-bottom: 4px; }
+
 .logo-link { text-decoration: none; color: inherit; }
 
 /* Admin page */
