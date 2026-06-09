@@ -69,10 +69,10 @@ function isContiguous(cubes) {
   return getIsland(cubes, cubes[0].id).length === cubes.length;
 }
 
-function isWon(state) {
+function isWon(state, targetColor = null) {
   const { cubes } = state;
   if (!cubes.length) return false;
-  const t = topColor(cubes[0]);
+  const t = targetColor ?? topColor(cubes[0]);
   return cubes.every(c => topColor(c) === t) && isContiguous(cubes);
 }
 
@@ -172,8 +172,8 @@ function remainingEstimate(state) {
 // ranked by remainingEstimate. Not optimal, but it solves boards the simple
 // greedy solver gets stuck on and returns a tight upper bound on the roll count.
 // Returns [{id, dir}, …] or null if no solution was found within the budget.
-export function beamSolve(initialState, { width = 300, maxDepth = 80 } = {}) {
-  if (isWon(initialState)) return [];
+export function beamSolve(initialState, { width = 300, maxDepth = 80, targetColor = null } = {}) {
+  if (isWon(initialState, targetColor)) return [];
 
   // Nodes keep a parent pointer + move so the winning path can be reconstructed
   // without copying the whole move list into every candidate.
@@ -198,7 +198,7 @@ export function beamSolve(initialState, { width = 300, maxDepth = 80 } = {}) {
           const nidx = nodes.length;
           nodes.push({ state: ns, parent: idx, move: { id: cube.id, dir } });
 
-          if (isWon(ns)) {
+          if (isWon(ns, targetColor)) {
             const path = [];
             for (let k = nidx; nodes[k].parent !== -1; k = nodes[k].parent)
               path.push(nodes[k].move);
@@ -235,10 +235,10 @@ const WIDTH_LADDER = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512];
 // solution length), or null if even the widest beam tried found nothing. Beam
 // solvability is near-monotone in width, so we scan the ladder low→high and stop
 // at the first hit.
-export function minBeamWidthToSolve(initialState, { ladder = WIDTH_LADDER, maxDepth = 80 } = {}) {
-  if (isWon(initialState)) return { width: 0, moves: 0 };
+export function minBeamWidthToSolve(initialState, { ladder = WIDTH_LADDER, maxDepth = 80, targetColor = null } = {}) {
+  if (isWon(initialState, targetColor)) return { width: 0, moves: 0 };
   for (const width of ladder) {
-    const sol = beamSolve(initialState, { width, maxDepth });
+    const sol = beamSolve(initialState, { width, maxDepth, targetColor });
     if (sol) return { width, moves: sol.length };
   }
   return null;

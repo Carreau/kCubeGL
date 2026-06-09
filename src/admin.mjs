@@ -87,15 +87,11 @@ async function loadUsers() {
 
 /* --- Featured puzzles: pin + order ----------------------------------------- */
 
-// Working copy of the pinned order (an array of puzzle ids), edited locally and
-// persisted with "Save order". `puzzles` is the full catalogue (server order);
-// `savedFeatured` is the pinned order as the server currently has it, so we can
-// tell when the working copy has unsaved edits.
 let puzzles = [];
 let featured = [];
 let savedFeatured = [];
-let dragId = null; // id of the row being dragged (drag-to-reorder)
-let solverRunning = false; // guards the (slow) solver run from re-entry
+let dragId = null;
+let solverRunning = false;
 
 const pct = (v) => (v == null ? '–' : Math.round(v * 100) + '%');
 const dash = (v) => (v == null ? '–' : v);
@@ -117,54 +113,88 @@ async function loadPuzzles() {
 
 function byId(id) { return puzzles.find((p) => p.id === id); }
 
-function puzzleRow(p, opts = {}) {
-  // Solver difficulty signals: the full (BFS) optimal and the beam-search
-  // approximate roll counts — handy for judging how hard a puzzle really is when
-  // ordering. "?" means the solver hasn't been run for this puzzle yet; "–"
-  // means it ran but that solver found no solution within its budget.
-  const solved = p.solvedAt != null;
-  const solverMeta = solved
-    ? `<span class="solver-meta" title="full solver (BFS-optimal) roll count">opt ${dash(p.fullOptimal)}</span>` +
-      ` · <span class="solver-meta" title="beam-search approximate roll count">beam ${dash(p.beamMoves)}</span>` +
-      ` · <span class="solver-meta effort" title="search-effort difficulty guide: minimum beam width to solve (1 ≈ no planning needed, higher = harder)">effort w${dash(p.minBeamWidth)}</span>`
-    : `<span class="solver-meta unsolved" title="solver not run yet">opt ? · beam ? · effort ?</span>`;
-  const meta =
-    `${p.numCubes} cubes · scramble ${p.scramble} · ${pct(p.failRate)} fail` +
-    (p.worldBest != null ? ` · world ${p.worldBest}` : '') + ' · ' + solverMeta;
-  const handle = opts.draggable ? '<span class="drag-handle" title="drag to reorder">⠿</span>' : '';
-  const solveBtn =
-    `<button class="link-btn solve-btn" data-id="${p.id}" type="button" title="run BFS + beam solvers">${solved ? 'Re-solve' : 'Solve'}</button>`;
-  return `<div class="puzzle-row${opts.draggable ? ' draggable' : ''}" data-id="${p.id}"${opts.draggable ? ' draggable="true"' : ''}>
-    ${handle}<span class="puzzle-name">${esc(p.name)}</span>
-    <span class="muted puzzle-meta">${meta}</span>
-    <span class="puzzle-actions">${solveBtn}${opts.actions || ''}</span>
-  </div>`;
+// Colour palette matching FACE_AXES in main.js (0=white … 5=green).
+const COLOR_META = [
+  { key: 'W', label: 'white',  hex: '#d0d4de', dark: true  },
+  { key: 'Y', label: 'yellow', hex: '#ffd23f', dark: true  },
+  { key: 'R', label: 'red',    hex: '#e5484d', dark: false },
+  { key: 'O', label: 'orange', hex: '#ff7a1a', dark: false },
+  { key: 'B', label: 'blue',   hex: '#3aa0ff', dark: false },
+  { key: 'G', label: 'green',  hex: '#3ecf6b', dark: true  },
+];
+
+function colorBeamCell(colorBeams, colorIdx, solved) {
+  const cm = COLOR_META[colorIdx];
+  if (!solved) {
+    return `<td class="cb-cell"><span class="cb-chip cb-unsolved" title="beam not run yet">?</span></td>`;
+  }
+  const v = colorBeams ? colorBeams[colorIdx] : null;
+  const text = v == null ? '–' : v;
+  const txtClass = cm.dark ? 'cb-dark' : 'cb-light';
+  return `<td class="cb-cell"><span class="cb-chip ${txtClass}" style="background:${cm.hex}" title="beam moves for ${cm.label} target">${text}</span></td>`;
 }
+
+function puzzleTr(p, opts = {}) {
+  const solved = p.solvedAt != null;
+  const dragCell = opts.draggable
+    ? `<td class="drag-cell"><span class="drag-handle" title="drag to reorder">⠿</span></td>`
+    : `<td class="drag-cell"></td>`;
+
+  const solveLabel = solved ? 'Re-solve' : 'Solve';
+  const solveBtn = `<button class="link-btn solve-btn" data-id="${p.id}" type="button">${solveLabel}</button>`;
+
+  const colorCells = COLOR_META.map((_, i) => colorBeamCell(p.colorBeams, i, solved)).join('');
+
+  const bfsCell = solved
+    ? `<td class="num-cell" title="BFS-optimal roll count">${dash(p.fullOptimal)}</td>`
+    : `<td class="num-cell muted" title="not run yet">?</td>`;
+  const beamCell = solved
+    ? `<td class="num-cell" title="beam-search roll count">${dash(p.beamMoves)}</td>`
+    : `<td class="num-cell muted" title="not run yet">?</td>`;
+  const effortCell = solved
+    ? `<td class="num-cell effort-cell" title="min beam width to solve (search effort; 1=easy)">${dash(p.minBeamWidth)}</td>`
+    : `<td class="num-cell muted" title="not run yet">?</td>`;
+
+  const attrs = opts.draggable ? ` class="puzzle-tr draggable" draggable="true" data-id="${p.id}"` : ` class="puzzle-tr" data-id="${p.id}"`;
+
+  return `<tr${attrs}>
+    ${dragCell}
+    <td class="name-cell">${esc(p.name)}</td>
+    <td class="num-cell">${p.numCubes}</td>
+    <td class="num-cell">${p.scramble}</td>
+    <td class="num-cell">${pct(p.failRate)}</td>
+    <td class="num-cell">${p.worldBest != null ? p.worldBest : '–'}</td>
+    ${bfsCell}${beamCell}${effortCell}
+    ${colorCells}
+    <td class="actions-cell">${solveBtn}${opts.actions || ''}</td>
+  </tr>`;
+}
+
+// Shared table header used by both featured and all-puzzles sections.
+const TABLE_HEAD = `<thead>
+  <tr class="puzzle-th-row">
+    <th class="drag-cell" title="drag to reorder"></th>
+    <th>Puzzle</th>
+    <th class="num-cell" title="number of cubes">Cubes</th>
+    <th class="num-cell" title="scramble depth">Scr</th>
+    <th class="num-cell" title="failure rate across all attempts">Fail%</th>
+    <th class="num-cell" title="world-best move count">World</th>
+    <th class="num-cell" title="BFS-optimal roll count">Opt</th>
+    <th class="num-cell" title="beam-search roll count">Beam</th>
+    <th class="num-cell" title="min beam width to solve — search effort (1=easy)">Eff</th>
+    ${COLOR_META.map(cm =>
+      `<th class="cb-cell" title="beam moves for ${cm.label} target">
+         <span class="cb-header-dot" style="background:${cm.hex}"></span>
+       </th>`
+    ).join('')}
+    <th>Actions</th>
+  </tr>
+</thead>`;
 
 function renderPuzzles() {
   const wrap = $('puzzleAdminWrap');
-  const featuredRows = featured.map((id, i) => {
-    const p = byId(id);
-    if (!p) return '';
-    const actions =
-      `<button class="link-btn move-btn" data-id="${id}" data-dir="-1" type="button" ${i === 0 ? 'disabled' : ''}>↑</button>` +
-      `<button class="link-btn move-btn" data-id="${id}" data-dir="1" type="button" ${i === featured.length - 1 ? 'disabled' : ''}>↓</button>` +
-      `<button class="link-btn unpin-btn" data-id="${id}" type="button">Unpin</button>`;
-    return puzzleRow(p, { actions, draggable: true });
-  }).join('');
-
-  const others = puzzles.filter((p) => !featured.includes(p.id));
-  const otherRows = others.map((p) =>
-    puzzleRow(p, { actions: `<button class="link-btn pin-btn" data-id="${p.id}" type="button">Pin</button>` })
-  ).join('');
-
   const dirty = isDirty();
-  const status = dirty
-    ? '<span class="unsaved-badge">● Unsaved changes</span>'
-    : '<span class="muted">All changes saved</span>';
 
-  // Solver run toolbar: how many puzzles have solver values, plus a button to
-  // run the (slow) BFS + beam solvers for any that don't yet.
   const total = puzzles.length;
   const solvedCount = puzzles.filter((p) => p.solvedAt != null).length;
   const pending = total - solvedCount;
@@ -172,25 +202,74 @@ function renderPuzzles() {
     ? 'Running solver…'
     : (pending > 0 ? `Run solver (${pending} pending)` : 'Re-run solver (all)');
 
-  wrap.innerHTML =
-    `<div class="puzzle-list${dirty ? ' dirty' : ''}">
-       <div class="solver-bar">
-         <button id="runSolver" class="primary" type="button" ${solverRunning ? 'disabled' : ''}>${runLabel}</button>
-         <span class="muted">${solvedCount}/${total} solved</span>
-         <span id="solverStatus" class="muted"></span>
-       </div>
-       <h3>Featured (${featured.length})${dirty ? ' <span class="unsaved-dot" title="unsaved changes">●</span>' : ''}</h3>
-       <p class="muted drag-hint">Drag rows (or use ↑/↓) to reorder featured puzzles.</p>
-       ${featuredRows || '<p class="muted">None pinned yet — pin a puzzle below.</p>'}
-       <div class="puzzle-save">
-         <button id="savePuzzleOrder" class="primary" type="button" ${dirty ? '' : 'disabled'}>Save order</button>
-         <button id="resetPuzzleOrder" class="link-btn" type="button" ${dirty ? '' : 'disabled'}>Discard</button>
-         <span id="puzzleSaveStatus">${status}</span>
-         <span id="puzzleSaveMsg" class="muted"></span>
-       </div>
-       <h3>All puzzles</h3>
-       ${otherRows || '<p class="muted">All puzzles are featured.</p>'}
-     </div>`;
+  const saveStatus = dirty
+    ? '<span class="unsaved-badge">● Unsaved changes</span>'
+    : '<span class="muted">All changes saved</span>';
+
+  // Featured section (draggable rows).
+  const featuredRows = featured.map((id, i) => {
+    const p = byId(id);
+    if (!p) return '';
+    const actions =
+      `<button class="link-btn move-btn" data-id="${id}" data-dir="-1" type="button" ${i === 0 ? 'disabled' : ''}>↑</button>` +
+      `<button class="link-btn move-btn" data-id="${id}" data-dir="1" type="button" ${i === featured.length - 1 ? 'disabled' : ''}>↓</button>` +
+      `<button class="link-btn unpin-btn" data-id="${id}" type="button">Unpin</button>`;
+    return puzzleTr(p, { actions, draggable: true });
+  }).join('');
+
+  // Unpinned section.
+  const others = puzzles.filter((p) => !featured.includes(p.id));
+  const otherRows = others.map((p) =>
+    puzzleTr(p, { actions: `<button class="link-btn pin-btn" data-id="${p.id}" type="button">Pin</button>` })
+  ).join('');
+
+  wrap.innerHTML = `
+    <div class="puzzle-list${dirty ? ' dirty' : ''}">
+      <div class="puzzle-panels">
+
+        <div class="puzzle-panel">
+          <div class="solver-bar">
+            <button id="runSolver" class="primary" type="button" ${solverRunning ? 'disabled' : ''}>${runLabel}</button>
+            <span class="muted">${solvedCount}/${total} solved</span>
+            <span id="solverStatus" class="muted"></span>
+          </div>
+        </div>
+
+        <div class="puzzle-panel">
+          <div class="puzzle-panel-head">
+            <h3>Featured (${featured.length})${dirty ? ' <span class="unsaved-dot" title="unsaved changes">●</span>' : ''}</h3>
+            <div class="puzzle-save">
+              <button id="savePuzzleOrder" class="primary" type="button" ${dirty ? '' : 'disabled'}>Save order</button>
+              <button id="resetPuzzleOrder" class="link-btn" type="button" ${dirty ? '' : 'disabled'}>Discard</button>
+              <span id="puzzleSaveStatus">${saveStatus}</span>
+              <span id="puzzleSaveMsg" class="muted"></span>
+            </div>
+          </div>
+          <p class="muted drag-hint">Drag rows (or use ↑/↓) to reorder. Pin puzzles from the section below.</p>
+          <div class="puzzle-table-wrap">
+            <table class="puzzle-table">
+              ${TABLE_HEAD}
+              <tbody id="featuredTbody">
+                ${featuredRows || `<tr><td colspan="16" class="muted" style="padding:12px 10px">None pinned yet.</td></tr>`}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="puzzle-panel">
+          <h3>All puzzles</h3>
+          <div class="puzzle-table-wrap">
+            <table class="puzzle-table">
+              ${TABLE_HEAD}
+              <tbody id="unpinnedTbody">
+                ${otherRows || `<tr><td colspan="16" class="muted" style="padding:12px 10px">All puzzles are featured.</td></tr>`}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </div>`;
 
   wrap.querySelectorAll('.pin-btn').forEach((b) =>
     b.addEventListener('click', () => { featured.push(Number(b.dataset.id)); renderPuzzles(); }));
@@ -212,7 +291,6 @@ function renderPuzzles() {
   wrap.querySelectorAll('.solve-btn').forEach((b) =>
     b.addEventListener('click', () => runSolver([Number(b.dataset.id)])));
   $('runSolver').addEventListener('click', () => {
-    // Solve everything still pending; if all are solved, re-run the whole set.
     const targets = pending > 0
       ? puzzles.filter((p) => p.solvedAt == null).map((p) => p.id)
       : puzzles.map((p) => p.id);
@@ -236,20 +314,18 @@ function renderPuzzles() {
   });
 }
 
-// HTML5 drag-and-drop to reorder featured rows. The dragged id is moved to the
-// drop target's position; the list re-renders (which marks it unsaved).
+// HTML5 drag-and-drop on <tr> rows to reorder featured puzzles.
 function wireDragReorder(wrap) {
-  wrap.querySelectorAll('.puzzle-row.draggable').forEach((row) => {
+  wrap.querySelectorAll('.puzzle-tr.draggable').forEach((row) => {
     row.addEventListener('dragstart', (e) => {
       dragId = Number(row.dataset.id);
       row.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
-      // Some browsers require data to be set for the drag to start.
       try { e.dataTransfer.setData('text/plain', String(dragId)); } catch { /* ignore */ }
     });
     row.addEventListener('dragend', () => {
       dragId = null;
-      wrap.querySelectorAll('.puzzle-row').forEach((r) => r.classList.remove('dragging', 'drop-target'));
+      wrap.querySelectorAll('.puzzle-tr').forEach((r) => r.classList.remove('dragging', 'drop-target'));
     });
     row.addEventListener('dragover', (e) => {
       if (dragId == null) return;
@@ -273,9 +349,8 @@ function wireDragReorder(wrap) {
   });
 }
 
-// Run the BFS + beam solvers for the given puzzle ids, one request at a time
-// (each can take a few seconds), folding each result back into the local
-// catalogue and refreshing the rows + progress as we go.
+// Run the solvers for the given puzzle ids one at a time, updating the local
+// catalogue and refreshing the table as each result comes back.
 async function runSolver(ids) {
   if (solverRunning || !ids.length) return;
   solverRunning = true;
@@ -287,7 +362,13 @@ async function runSolver(ids) {
     if (status) status.textContent = `Solving ${p ? p.name : id}… (${done}/${ids.length})`;
     try {
       const r = await api.adminSolvePuzzle(id);
-      if (p) { p.fullOptimal = r.fullOptimal; p.beamMoves = r.beamMoves; p.minBeamWidth = r.minBeamWidth; p.solvedAt = r.solvedAt; }
+      if (p) {
+        p.fullOptimal = r.fullOptimal;
+        p.beamMoves = r.beamMoves;
+        p.minBeamWidth = r.minBeamWidth;
+        p.colorBeams = r.colorBeams ?? null;
+        p.solvedAt = r.solvedAt;
+      }
     } catch {
       failed++;
     }

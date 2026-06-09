@@ -104,6 +104,8 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  // Additive migration: add color_beams if it doesn't exist yet (safe to retry).
+  try { db.exec("ALTER TABLE puzzles ADD COLUMN color_beams TEXT"); } catch (_) {}
   const wrapped = new Db(db);
   wrapped.seedCatalog();
   return wrapped;
@@ -283,11 +285,11 @@ export class Db {
     });
     const ts = now();
     this.db.prepare(
-      "UPDATE puzzles SET full_optimal = ?, beam_moves = ?, min_beam_width = ?, solved_at = ? WHERE id = ?"
-    ).run(r.bfs ?? null, r.beam ?? null, r.searchWidth ?? null, ts, puzzleId);
+      "UPDATE puzzles SET full_optimal = ?, beam_moves = ?, min_beam_width = ?, color_beams = ?, solved_at = ? WHERE id = ?"
+    ).run(r.bfs ?? null, r.beam ?? null, r.searchWidth ?? null, JSON.stringify(r.colorBeams), ts, puzzleId);
     return {
       fullOptimal: r.bfs ?? null, beamMoves: r.beam ?? null,
-      minBeamWidth: r.searchWidth ?? null, solvedAt: ts,
+      minBeamWidth: r.searchWidth ?? null, colorBeams: r.colorBeams, solvedAt: ts,
     };
   }
 
@@ -486,7 +488,7 @@ export class Db {
     const rows = this.db.prepare(
       `SELECT
          p.id, p.name, p.seed, p.num_cubes, p.scramble, p.par, p.optimal,
-         p.pinned, p.sort_order, p.full_optimal, p.beam_moves, p.min_beam_width, p.solved_at,
+         p.pinned, p.sort_order, p.full_optimal, p.beam_moves, p.min_beam_width, p.color_beams, p.solved_at,
          (SELECT MIN(moves_used) FROM attempts a
             WHERE a.puzzle_id = p.id AND a.outcome = 'won') AS world_best,
          (SELECT COUNT(DISTINCT user_id) FROM attempts a
@@ -528,9 +530,10 @@ export class Db {
         avgMoves: r.avg_moves ?? null,
         // Solver difficulty signals — populated by the admin-triggered solver run
         // (db.solvePuzzle). solvedAt is null until the solver has been run.
-        fullOptimal: r.full_optimal ?? null,   // full solver: provably-optimal roll count
-        beamMoves: r.beam_moves ?? null,       // beam-search approximate roll count
-        minBeamWidth: r.min_beam_width ?? null, // min beam width to solve (search-effort guide)
+        fullOptimal: r.full_optimal ?? null,
+        beamMoves: r.beam_moves ?? null,
+        minBeamWidth: r.min_beam_width ?? null,
+        colorBeams: r.color_beams ? JSON.parse(r.color_beams) : null,
         solvedAt: r.solved_at ?? null,
       };
     });
