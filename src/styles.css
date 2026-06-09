@@ -506,6 +506,7 @@ table.lb .avatar { margin-right: 6px; }
 .card-top .dot { width: 9px; height: 9px; border-radius: 50%; background: rgba(255, 255, 255, 0.18); margin-left: auto; }
 .card.solved .dot { background: #3ecf6b; box-shadow: 0 0 8px rgba(62, 207, 107, 0.6); }
 .card-mid { font-size: 12px; }
+.effort-val { color: #ffb454; font-weight: 600; }
 .card-stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
 .card-stats b { color: var(--ink); }
 .card-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
