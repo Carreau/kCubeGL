@@ -74,10 +74,10 @@ export async function probe() {
   return ok !== null;
 }
 
-// Register a username and store the returned token. Throws ApiError so the
-// caller can react to 409 (name taken) / offline.
-export async function createUser(username) {
-  const data = await request("POST", "/users", { username });
+// Register a username (and optional Gravatar email) and store the returned
+// token. Throws ApiError so the caller can react to 409 (name taken) / offline.
+export async function createUser(username, email) {
+  const data = await request("POST", "/users", { username, email });
   if (data && data.token) setToken(data.token);
   return data;
 }
@@ -86,6 +86,12 @@ export async function createUser(username) {
 export async function me() {
   if (!getToken()) return null;
   return tryReq("GET", "/me");
+}
+
+// Set/update/clear my Gravatar email. Returns the updated identity or null
+// offline. Pass "" or null to clear it.
+export function updateEmail(email) {
+  return tryReq("PATCH", "/me", { email });
 }
 
 export function myStats() { return tryReq("GET", "/me/stats"); }

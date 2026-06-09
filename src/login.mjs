@@ -112,13 +112,14 @@ async function doPasskeyLogin() {
 async function doRegister(e) {
   e.preventDefault();
   const name = $('usernameInput').value.trim();
+  const email = $('emailInput').value.trim();
   const errEl = $('registerErr');
   errEl.classList.add('hidden');
   if (!name) { errEl.textContent = 'Enter a username.'; errEl.classList.remove('hidden'); return; }
 
   $('registerBtn').disabled = true;
   try {
-    await api.createUser(name);
+    await api.createUser(name, email || undefined);
     // The account now exists and api.createUser() has stored its session token,
     // so the player is already signed in. Only offer the passkey step when it
     // can actually work; on a dev server without a secure context we'd just be
@@ -130,7 +131,10 @@ async function doRegister(e) {
       location.href = returnUrl();
     }
   } catch (ex) {
-    errEl.textContent = ex?.status === 409 ? 'Name taken — try another.' : "Couldn't create account. Is the server running?";
+    errEl.textContent =
+      ex?.status === 409 ? 'Name taken — try another.'
+      : ex?.status === 400 ? (ex.message || 'Check your details and try again.')
+      : "Couldn't create account. Is the server running?";
     errEl.classList.remove('hidden');
     $('registerBtn').disabled = false;
   }

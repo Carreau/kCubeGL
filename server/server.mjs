@@ -93,6 +93,17 @@ function fwdHost(req) {
   return (trustProxy() && req.headers['x-forwarded-host']) || req.headers.host || 'localhost';
 }
 
+// Validate an optional Gravatar email. Returns null for "no email" (empty/absent),
+// a normalised address for a valid one, or undefined for something malformed (so
+// the caller can answer 400 rather than silently dropping it). The address is
+// only used to derive a hash — it is never stored.
+const cleanEmail = (v) => {
+  if (v == null || v === "") return null;
+  if (typeof v !== "string") return undefined;
+  const s = v.trim().toLowerCase();
+  return s.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s) ? s : undefined;
+};
+
 function getOrigin(req) {
   const proto = (trustProxy() && req.headers['x-forwarded-proto']) ||
     (req.socket && req.socket.encrypted ? 'https' : 'http');
@@ -159,20 +170,23 @@ async function handleApi(req, res, url, db) {
     return sendJson(res, 200, { ok: true });
   }
 
-  // POST /api/users  { username, adminToken? }
+  // POST /api/users  { username, adminToken?, email? }
   // Anyone can register a username (the app has no passwords). Admin is granted
   // only when the request carries the bootstrap secret KCUBE_ADMIN_TOKEN — there
-  // is intentionally no "first user becomes admin" magic.
+  // is intentionally no "first user becomes admin" magic. An optional email is
+  // used only to derive a Gravatar hash and is never stored.
   if (method === "POST" && parts[1] === "users" && parts.length === 2) {
     const body = await readJson(req);
     const username = typeof body.username === "string" ? body.username.trim() : "";
     if (username.length < 1 || username.length > 24) {
       return sendJson(res, 400, { error: "name must be 1–24 characters" });
     }
+    const email = cleanEmail(body.email);
+    if (email === undefined) return sendJson(res, 400, { error: "invalid email" });
     const secret = adminToken();
     const admin = !!secret && body.adminToken === secret;
     try {
-      return sendJson(res, 201, db.createUser(username, { admin }));
+      return sendJson(res, 201, db.createUser(username, { admin, email }));
     } catch (e) {
       if (e.code === "DUP") return sendJson(res, 409, { error: "name taken" });
       throw e;
@@ -183,6 +197,15 @@ async function handleApi(req, res, url, db) {
   if (method === "GET" && parts[1] === "me" && parts.length === 2) {
     const u = requireUser(); if (!u) return;
     return sendJson(res, 200, u);
+  }
+
+  // PATCH /api/me  { email }  — set/update/clear the Gravatar email.
+  if (method === "PATCH" && parts[1] === "me" && parts.length === 2) {
+    const u = requireUser(); if (!u) return;
+    const body = await readJson(req);
+    const email = cleanEmail(body.email);
+    if (email === undefined) return sendJson(res, 400, { error: "invalid email" });
+    return sendJson(res, 200, { ...u, ...db.setUserEmail(u.id, email) });
   }
 
   // GET /api/me/stats
@@ -210,6 +233,7 @@ async function handleApi(req, res, url, db) {
       yourBest: u ? db.userBest(u.id, meta.id) : null,
       leaderboard: db.leaderboard(meta.id, 10).map((r) => ({
         username: r.username,
+        avatarHash: r.avatarHash ?? null,
         best: r.best,
         durationMs: r.durationMs,
         attempts: r.attempts,

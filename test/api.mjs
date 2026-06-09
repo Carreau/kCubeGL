@@ -69,6 +69,25 @@ try {
   eq((await call("GET", "/me", { token: tokenA })).body.username, "alice", "me = alice");
   eq((await call("GET", "/me")).status, 401, "me without token → 401");
 
+  // gravatar email: optional on register, validated, hashed — and the raw email
+  // is NEVER stored or echoed back, only its derived hash.
+  eq((await call("POST", "/users", { body: { username: "dave", email: "not-an-email" } })).status, 400, "bad email → 400");
+  const ezra = await call("POST", "/users", { body: { username: "ezra", email: "Ezra@Example.com" } });
+  eq(ezra.status, 201, "create ezra with email → 201");
+  ok(ezra.body.avatarHash && ezra.body.avatarHash.length === 32, "ezra got a 32-char avatar hash");
+  ok(!("email" in ezra.body), "email is never returned (not stored)");
+  const tokenE = ezra.body.token;
+  // /me exposes the hash but no email; PATCH /me can change it; bad email rejected.
+  eq((await call("GET", "/me", { token: tokenE })).body.avatarHash, ezra.body.avatarHash, "me exposes avatarHash");
+  ok(!("email" in (await call("GET", "/me", { token: tokenE })).body), "me never exposes an email");
+  eq((await call("PATCH", "/me", { token: tokenE, body: { email: "bad" } })).status, 400, "PATCH bad email → 400");
+  const updated = await call("PATCH", "/me", { token: tokenE, body: { email: "ezra2@example.com" } });
+  eq(updated.status, 200, "PATCH valid email → 200");
+  ok(updated.body.avatarHash && updated.body.avatarHash !== ezra.body.avatarHash, "avatar hash changes with email");
+  eq((await call("PATCH", "/me", { token: tokenE, body: { email: "" } })).body.avatarHash, null, "clearing email nulls the hash");
+  // alice has no email → no avatar hash
+  eq((await call("GET", "/me", { token: tokenA })).body.avatarHash, null, "no email → null avatarHash");
+
   // attempts must be authenticated; unknown puzzles are rejected
   eq((await call("POST", "/attempts", { body: { puzzle: P0 } })).status, 401, "attempt without token → 401");
   eq((await call("POST", "/attempts", { token: tokenA, body: { puzzle: "no-such-puzzle" } })).status, 404, "unknown puzzle → 404");
@@ -93,6 +112,8 @@ try {
   eq(d.leaderboard[0].username, "alice", "leaderboard #1 is alice");
   eq(d.leaderboard[0].best, 5, "leaderboard #1 best 5");
   eq(d.leaderboard[0].you, true, "leaderboard marks you");
+  ok("avatarHash" in d.leaderboard[0], "leaderboard rows carry avatarHash");
+  eq(d.leaderboard[0].avatarHash, null, "alice (no email) has null leaderboard avatarHash");
   eq(d.leaderboard[1].username, "bob", "leaderboard #2 is bob");
   eq(d.stats.solves, 2, "2 distinct solvers");
   eq(d.stats.players, 2, "2 players");

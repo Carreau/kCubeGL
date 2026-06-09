@@ -32,6 +32,11 @@
           <input id="usernameInput" type="text" placeholder="pick a name (1–24 chars)"
             maxlength="24" autocomplete="username" autocorrect="off" autocapitalize="off" spellcheck="false" />
         </div>
+        <div class="field">
+          <label for="emailInput">Email <span class="muted">(optional — for your Gravatar)</span></label>
+          <input id="emailInput" type="email" placeholder="you@example.com"
+            maxlength="254" autocomplete="email" autocorrect="off" autocapitalize="off" spellcheck="false" />
+        </div>
         <button type="submit" class="primary" id="registerBtn">Create Account</button>
         <p id="registerErr" class="auth-err hidden"></p>
       </form>
