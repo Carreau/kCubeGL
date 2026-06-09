@@ -31,6 +31,7 @@ const STORE_KEY = "kcube.v1"; // localStorage key for persisted scores
 const SOLVE_ROLL_MS = 420; // roll duration while auto-solving (vs ROLL_MS)
 const SOLVE_STEP_MS = 380; // pause between solution moves
 const SOLVE_CURSOR_MS = 130; // per-cube step as the cursor walks between solution moves
+const CURSOR_HOP_MS = 80;   // smooth slide when the player hops to an adjacent cube
 
 // Six distinct face colours. Index doubles as the "face id".
 const COLORS = [
@@ -459,7 +460,14 @@ function isSolved() {
 
 function selectCube(idx) {
   game.selected = idx;
-  updateCursor(true);
+  const cube = game.cubes[idx];
+  if (!cube) return;
+  // Slide from the cursor's current visual position to the new cube.
+  game.walk = {
+    pts: [{ x: cursor.position.x, z: cursor.position.z },
+          { x: cellX(cube.col), z: cellZ(cube.row) }],
+    seg: 0, t: 0, onDone: null, ms: CURSOR_HOP_MS,
+  };
 }
 
 function tryMove(key) {
@@ -486,6 +494,7 @@ function tryMove(key) {
 
 // cost=false rolls are free (used when auto-playing the solution).
 function startRoll(cube, dir, nr, nc, cost) {
+  game.walk = null; // cancel any in-progress cursor slide
   const center = cube.mesh.position.clone();
   const pivot = center.clone().add(dir.edgeOffset);
   game.anim = {
@@ -536,7 +545,7 @@ function startCursorWalk(path, onDone) {
 
 function stepWalk(dt) {
   const w = game.walk;
-  w.t += dt / SOLVE_CURSOR_MS;
+  w.t += dt / (w.ms ?? SOLVE_CURSOR_MS);
   // carry the residual into later segments if a frame spanned more than one
   while (w.t >= 1 && w.seg < w.pts.length - 2) { w.t -= 1; w.seg += 1; }
   const onLast = w.seg >= w.pts.length - 2;
@@ -548,7 +557,7 @@ function stepWalk(dt) {
   if (onLast && w.t >= 1) {
     const done = w.onDone;
     game.walk = null;
-    done();
+    if (done) done();
   }
 }
 
