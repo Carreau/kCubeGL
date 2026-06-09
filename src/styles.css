@@ -67,41 +67,37 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  margin-top: 6px;
+  gap: 3px;
+  margin-top: 4px;
 }
-.wcp-label {
-  font-size: 11px;
-  color: var(--muted);
-  margin-right: 2px;
-  white-space: nowrap;
-}
-.wcp-swatch {
-  width: 18px;
-  height: 18px;
+#win-color-picker .wcp-swatch {
+  width: 13px;
+  height: 13px;
+  min-width: 0;
   border-radius: 50%;
-  background: var(--sc, #333);
-  border: 2px solid transparent;
+  background: var(--sc, rgba(255,255,255,0.12));
+  border: 1px solid transparent;
   cursor: pointer;
   padding: 0;
   transition: transform 0.12s, border-color 0.12s;
   pointer-events: auto;
+  backdrop-filter: none;
 }
-.wcp-swatch:hover { transform: scale(1.15); }
-.wcp-swatch.active {
+#win-color-picker .wcp-swatch:hover { transform: scale(1.2); filter: none; }
+#win-color-picker .wcp-swatch.active {
   border-color: #fff;
-  transform: scale(1.3);
+  transform: scale(1.35);
 }
-.wcp-swatch:disabled { opacity: 0.35; cursor: default; transform: none; }
-.wcp-any {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.2);
-  font-size: 9px;
+#win-color-picker .wcp-swatch:disabled { opacity: 0.3; cursor: default; transform: none; }
+#win-color-picker .wcp-any {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  font-size: 8px;
   color: var(--muted);
-  line-height: 1;
+  line-height: 13px;
   letter-spacing: 0;
 }
-.wcp-any.active { border-color: #fff; }
+#win-color-picker .wcp-any.active { border-color: #fff; }
 #win-target-dot {
   display: inline-block;
   width: 8px;
