@@ -37,9 +37,23 @@
           <input id="emailInput" type="email" placeholder="you@example.com"
             maxlength="254" autocomplete="email" autocorrect="off" autocapitalize="off" spellcheck="false" />
         </div>
+
+        <!-- Admin setup: hidden by default, toggled via link below -->
+        <div id="adminTokenArea" class="hidden">
+          <div class="field">
+            <label for="adminTokenInput">Admin token <span class="muted">(KCUBE_ADMIN_TOKEN)</span></label>
+            <input id="adminTokenInput" type="password" placeholder="server bootstrap secret"
+              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </div>
+        </div>
+
         <button type="submit" class="primary" id="registerBtn">Create Account</button>
         <p id="registerErr" class="auth-err hidden"></p>
       </form>
+
+      <p class="auth-admin-toggle">
+        <button id="adminToggleBtn" class="link-btn" type="button">Set up admin account</button>
+      </p>
 
       <!-- Post-registration: offer passkey -->
       <div id="addPasskeyArea" class="hidden">

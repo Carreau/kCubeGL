@@ -107,6 +107,18 @@ async function doPasskeyLogin() {
   }
 }
 
+/* --- admin token toggle ----------------------------------------------------- */
+
+let adminMode = false;
+
+function toggleAdminMode() {
+  adminMode = !adminMode;
+  $('adminTokenArea').classList.toggle('hidden', !adminMode);
+  $('registerBtn').textContent = adminMode ? 'Create Admin Account' : 'Create Account';
+  $('adminToggleBtn').textContent = adminMode ? 'Cancel admin setup' : 'Set up admin account';
+  if (!adminMode) $('adminTokenInput').value = '';
+}
+
 /* --- registration ----------------------------------------------------------- */
 
 async function doRegister(e) {
@@ -117,9 +129,16 @@ async function doRegister(e) {
   errEl.classList.add('hidden');
   if (!name) { errEl.textContent = 'Enter a username.'; errEl.classList.remove('hidden'); return; }
 
+  const adminToken = adminMode ? $('adminTokenInput').value.trim() : '';
+  if (adminMode && !adminToken) {
+    errEl.textContent = 'Enter the admin token, or cancel admin setup.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
   $('registerBtn').disabled = true;
   try {
-    await api.createUser(name, email || undefined);
+    await api.createUser(name, { email: email || undefined, adminToken: adminToken || undefined });
     // The account now exists and api.createUser() has stored its session token,
     // so the player is already signed in. Only offer the passkey step when it
     // can actually work; on a dev server without a secure context we'd just be
@@ -201,6 +220,7 @@ async function boot() {
   }
 
   $('registerForm').addEventListener('submit', doRegister);
+  $('adminToggleBtn').addEventListener('click', toggleAdminMode);
   $('addPasskeyBtn').addEventListener('click', doAddPasskey);
   $('skipPasskeyBtn').addEventListener('click', () => { location.href = returnUrl(); });
 }
