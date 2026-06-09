@@ -28,12 +28,17 @@ try {
   await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
   await page.waitForSelector(".card", { timeout: 15000 });
 
-  // Navigate to the login page, register, then skip passkey to return to index.
+  // Navigate to the login page and register. The post-register step offers a
+  // passkey only when one can actually be created (secure context + a platform
+  // authenticator); headless browsers have none, so registration continues
+  // straight to index. Handle both: skip the passkey prompt if it appears.
   await page.goto(new URL("login.html", url).href, { waitUntil: "networkidle", timeout: 15000 });
   await page.fill("#usernameInput", "tester");
   await page.click("button#registerBtn");
-  await page.waitForSelector("#addPasskeyArea", { state: "visible", timeout: 10000 });
-  await page.click("#skipPasskeyBtn");
+  const passkeyPrompt = await page
+    .waitForSelector("#addPasskeyArea", { state: "visible", timeout: 5000 })
+    .catch(() => null);
+  if (passkeyPrompt) await page.click("#skipPasskeyBtn");
   await page.waitForSelector(".who-pill", { timeout: 15000 });
   const who = await page.$eval(".who-pill", (e) => e.textContent);
   if (!/tester/.test(who)) fail(`expected to be signed in as tester, saw "${who}"`);
