@@ -174,6 +174,49 @@ try {
   const afterUnpin = (await call("GET", "/puzzles")).body.find((p) => p.name === P2);
   ok(!afterUnpin.pinned, "P2 no longer pinned");
 
+  // --- password authentication ---
+  // Registration with password: too short is rejected; valid password is accepted.
+  eq((await call("POST", "/users", { body: { username: "pwshort", password: "short" } })).status, 400, "password < 8 chars → 400");
+  const pwUser = await call("POST", "/users", { body: { username: "frank", password: "correct-horse" } });
+  eq(pwUser.status, 201, "create frank with password → 201");
+  ok(pwUser.body.hasPassword, "frank.hasPassword = true");
+  const tokenF = pwUser.body.token;
+
+  // Password login: bad credentials return 401; correct credentials return a token.
+  eq((await call("POST", "/auth/password/login", { body: { username: "frank", password: "wrong-pw" } })).status, 401, "wrong password → 401");
+  eq((await call("POST", "/auth/password/login", { body: { username: "nobody", password: "correct-horse" } })).status, 401, "unknown user → 401");
+  eq((await call("POST", "/auth/password/login", { body: { username: "frank" } })).status, 400, "missing password → 400");
+  const loginRes = await call("POST", "/auth/password/login", { body: { username: "frank", password: "correct-horse" } });
+  eq(loginRes.status, 200, "correct credentials → 200");
+  eq(loginRes.body.token, tokenF, "password login returns same token");
+  eq(loginRes.body.username, "frank", "password login returns username");
+
+  // Accounts without a password cannot use password login.
+  eq((await call("POST", "/auth/password/login", { body: { username: "alice", password: "anything" } })).status, 401, "password-less account → 401");
+
+  // listUsers shows hasPassword correctly.
+  const userList = (await call("GET", "/admin/users", { token: tokenA })).body;
+  const frankRow = userList.find(u => u.username === "frank");
+  ok(frankRow?.hasPassword, "admin user list shows frank.hasPassword = true");
+  const aliceRow = userList.find(u => u.username === "alice");
+  ok(!aliceRow?.hasPassword, "admin user list shows alice.hasPassword = false");
+
+  // Admin reset password: set, use, clear.
+  const frankId = frankRow.id;
+  eq((await call("POST", `/admin/users/${frankId}/reset-password`, { token: tokenA, body: { newPassword: "short" } })).status, 400, "admin set too-short password → 400");
+  const resetRes = await call("POST", `/admin/users/${frankId}/reset-password`, { token: tokenA, body: { newPassword: "new-password-123" } });
+  eq(resetRes.status, 200, "admin reset password → 200");
+  ok(resetRes.body.hasPassword, "reset returns hasPassword = true");
+  eq((await call("POST", "/auth/password/login", { body: { username: "frank", password: "correct-horse" } })).status, 401, "old password no longer works");
+  eq((await call("POST", "/auth/password/login", { body: { username: "frank", password: "new-password-123" } })).status, 200, "new password works");
+  // Clear the password.
+  const clearRes = await call("POST", `/admin/users/${frankId}/reset-password`, { token: tokenA, body: { newPassword: null } });
+  eq(clearRes.status, 200, "admin clear password → 200");
+  ok(!clearRes.body.hasPassword, "clear returns hasPassword = false");
+  eq((await call("POST", "/auth/password/login", { body: { username: "frank", password: "new-password-123" } })).status, 401, "password cleared → login fails");
+  // Non-admin cannot reset passwords.
+  eq((await call("POST", `/admin/users/${frankId}/reset-password`, { token: tokenB, body: { newPassword: "hax-password" } })).status, 403, "non-admin reset → 403");
+
   // --- admin: run the BFS + beam solver for one puzzle ---
   const easy = adminCat.reduce((a, b) => (b.numCubes < a.numCubes ? b : a));
   eq((await call("POST", `/admin/puzzles/${easy.id}/solve`)).status, 401, "solve needs auth");

@@ -15,9 +15,17 @@
     "test:api": "node --disable-warning=ExperimentalWarning test/api.mjs",
     "test:smoke": "node test/smoke.mjs"
   },
-  "keywords": ["webgl", "three.js", "puzzle", "game"],
+  "keywords": [
+    "webgl",
+    "three.js",
+    "puzzle",
+    "game"
+  ],
   "license": "MIT",
   "devDependencies": {
     "playwright": "^1.56.1"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "^2.0.2"
   }
 }

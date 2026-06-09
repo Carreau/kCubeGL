@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS users (
   is_admin       INTEGER NOT NULL DEFAULT 0,
   -- Gravatar hash derived from the player's email. We hash the email and keep
   -- ONLY the hash (never the raw address); non-null means an email was supplied.
-  avatar_hash    TEXT
+  avatar_hash    TEXT,
+  password_hash  TEXT                    -- argon2id hash; null = no password set
 );
 
 CREATE TABLE IF NOT EXISTS passkeys (
@@ -106,6 +107,11 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   db.exec(SCHEMA);
   // Additive migration: add color_beams if it doesn't exist yet (safe to retry).
   try { db.exec("ALTER TABLE puzzles ADD COLUMN color_beams TEXT"); } catch (_) {}
+  // Migration: add password_hash to existing DBs created before this column existed.
+  const cols = db.prepare("PRAGMA table_info(users)").all();
+  if (!cols.some(c => c.name === "password_hash")) {
+    db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT;");
+  }
   const wrapped = new Db(db);
   wrapped.seedCatalog();
   return wrapped;
@@ -122,15 +128,15 @@ export class Db {
   // (never the raw address). Throws an Error with .code === "DUP" if the name
   // (case-insensitively) is taken. Admin is granted only when the caller proves
   // the bootstrap secret (KCUBE_ADMIN_TOKEN) — see the POST /api/users route.
-  createUser(username, { admin = false, email = null } = {}) {
+  createUser(username, { admin = false, email = null, passwordHash = null } = {}) {
     const token = randomBytes(24).toString("base64url");
     const isAdmin = admin ? 1 : 0;
-    const hash = email ? gravatarHash(email) : null;
+    const avatarHash = email ? gravatarHash(email) : null;
     try {
       const r = this.db
-        .prepare("INSERT INTO users (username, username_lower, token, created_at, is_admin, avatar_hash) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(username, username.toLowerCase(), token, now(), isAdmin, hash);
-      return { id: Number(r.lastInsertRowid), username, token, isAdmin: isAdmin === 1, avatarHash: hash };
+        .prepare("INSERT INTO users (username, username_lower, token, created_at, is_admin, avatar_hash, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(username, username.toLowerCase(), token, now(), isAdmin, avatarHash, passwordHash);
+      return { id: Number(r.lastInsertRowid), username, token, isAdmin: isAdmin === 1, avatarHash, hasPassword: !!passwordHash };
     } catch (e) {
       if (/UNIQUE/i.test(String(e && e.message))) {
         const err = new Error("username taken");
@@ -139,6 +145,21 @@ export class Db {
       }
       throw e;
     }
+  }
+
+  // Returns the full user row for password-based login (includes password_hash and token).
+  getUserByUsername(username) {
+    if (!username) return null;
+    const row = this.db.prepare(
+      "SELECT id, username, token, is_admin AS isAdmin, password_hash FROM users WHERE username_lower = ?"
+    ).get(username.toLowerCase());
+    if (!row) return null;
+    return { id: row.id, username: row.username, token: row.token, isAdmin: row.isAdmin === 1, passwordHash: row.password_hash };
+  }
+
+  // Set or clear a user's password hash. Pass null to remove password login.
+  setUserPassword(userId, passwordHash) {
+    this.db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, userId);
   }
 
   userByToken(token) {
@@ -204,10 +225,11 @@ export class Db {
   listUsers() {
     return this.db.prepare(`
       SELECT u.id, u.username, u.is_admin AS isAdmin, u.created_at AS createdAt,
+             u.password_hash IS NOT NULL AS hasPassword,
              COUNT(p.credential_id) AS passkeyCount
       FROM users u LEFT JOIN passkeys p ON p.user_id = u.id
       GROUP BY u.id ORDER BY u.id ASC
-    `).all().map(r => ({ ...r, isAdmin: r.isAdmin === 1 }));
+    `).all().map(r => ({ ...r, isAdmin: r.isAdmin === 1, hasPassword: r.hasPassword === 1 }));
   }
 
   setUserAdmin(userId, isAdmin) {

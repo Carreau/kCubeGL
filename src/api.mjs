@@ -77,11 +77,21 @@ export async function probe() {
 // Register a username and store the returned token. Throws ApiError so the
 // caller can react to 409 (name taken) / offline.
 // Pass adminToken to claim admin rights when KCUBE_ADMIN_TOKEN matches.
-export async function createUser(username, { email, adminToken } = {}) {
+// Pass password (≥8 chars) to enable password-based login for this account.
+export async function createUser(username, { email, adminToken, password } = {}) {
   const body = { username };
   if (email) body.email = email;
   if (adminToken) body.adminToken = adminToken;
+  if (password) body.password = password;
   const data = await request("POST", "/users", body);
+  if (data && data.token) setToken(data.token);
+  return data;
+}
+
+// Sign in with username and password. Stores the token on success.
+// Throws ApiError (401 = wrong credentials; 400 = missing fields).
+export async function passwordLogin(username, password) {
+  const data = await request("POST", "/auth/password/login", { username, password });
   if (data && data.token) setToken(data.token);
   return data;
 }
@@ -166,6 +176,11 @@ export async function adminUpdateUser(id, data) {
 
 export async function adminDeleteUser(id) {
   return request('DELETE', `/admin/users/${id}`, {});
+}
+
+// Set or clear a user's password. Pass null/empty to remove password login.
+export async function adminResetUserPassword(id, newPassword) {
+  return request('POST', `/admin/users/${id}/reset-password`, { newPassword: newPassword || null });
 }
 
 export function adminListPuzzles() {

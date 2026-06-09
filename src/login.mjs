@@ -120,6 +120,33 @@ function toggleAdminMode() {
   if (!adminMode) $('adminTokenInput').value = '';
 }
 
+/* --- password login --------------------------------------------------------- */
+
+async function doPasswordLogin(e) {
+  e.preventDefault();
+  const username = $('loginUsernameInput').value.trim();
+  const password = $('loginPasswordInput').value;
+  const errEl = $('loginErr');
+  errEl.classList.add('hidden');
+  if (!username || !password) {
+    errEl.textContent = 'Enter your username and password.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  $('passwordLoginBtn').disabled = true;
+  try {
+    await api.passwordLogin(username, password);
+    location.href = returnUrl();
+  } catch (ex) {
+    errEl.textContent =
+      ex?.status === 401 ? 'Invalid username or password.'
+      : ex?.status === 400 ? (ex.message || 'Check your details.')
+      : "Sign-in failed. Is the server running?";
+    errEl.classList.remove('hidden');
+    $('passwordLoginBtn').disabled = false;
+  }
+}
+
 /* --- registration ----------------------------------------------------------- */
 
 async function doRegister(e) {
@@ -136,9 +163,19 @@ async function doRegister(e) {
     return;
   }
 
+  const password = $('regPasswordInput').value;
+  if (password && password.length < 8) {
+    errEl.textContent = 'Password must be at least 8 characters, or leave it blank.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
   $('registerBtn').disabled = true;
   try {
-    await api.createUser(name, { adminToken: adminToken || undefined });
+    await api.createUser(name, {
+      adminToken: adminToken || undefined,
+      password: password || undefined,
+    });
     // The account now exists and api.createUser() has stored its session token,
     // so the player is already signed in. Only offer the passkey step when it
     // can actually work; on a dev server without a secure context we'd just be
@@ -210,13 +247,18 @@ async function boot() {
     if (me) { location.href = returnUrl(); return; }
   }
 
-  if (online && await passkeyAvailable()) {
-    $('passkeyLoginArea').classList.remove('hidden');
-    $('passkeyLoginBtn').addEventListener('click', doPasskeyLogin);
-  } else if (online && !secureContextOk() && typeof PublicKeyCredential !== 'undefined') {
-    // The device supports passkeys but this origin can't use them — tell the
-    // player why the sign-in button is missing instead of leaving them stuck.
-    setStatus(INSECURE_MSG, true);
+  if (online) {
+    $('passwordLoginArea').classList.remove('hidden');
+    $('passwordLoginForm').addEventListener('submit', doPasswordLogin);
+
+    if (await passkeyAvailable()) {
+      $('passkeyLoginArea').classList.remove('hidden');
+      $('passkeyLoginBtn').addEventListener('click', doPasskeyLogin);
+    } else if (!secureContextOk() && typeof PublicKeyCredential !== 'undefined') {
+      // The device supports passkeys but this origin can't use them — tell the
+      // player why the passkey button is missing instead of leaving them stuck.
+      setStatus(INSECURE_MSG, true);
+    }
   }
 
   $('registerForm').addEventListener('submit', doRegister);
