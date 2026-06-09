@@ -175,7 +175,9 @@ function cardHtml(p) {
       `<div class="card-top"><span class="lvl">${esc(p.name)}</span>` +
       (p.pinned ? `<span class="pin-badge" title="featured">★</span>` : "") +
       `<span class="dot" title="${solved ? "solved" : "unsolved"}"></span></div>` +
-      `<div class="card-mid muted">${p.numCubes} cubes · par ${p.par}</div>` +
+      `<div class="card-mid muted">${p.numCubes} cubes · par ${p.par}` +
+      (p.minBeamWidth != null ? ` · effort <span class="effort-val">w${p.minBeamWidth}</span>` : "") +
+      `</div>` +
       `<div class="card-stats">` +
         `<span>you <b>${dash(p.yourBest)}</b></span>` +
         `<span>world <b>${dash(p.worldBest)}</b></span>` +
