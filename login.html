@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>kCube — Sign In</title>
   <link rel="stylesheet" href="src/styles.css" />
+  <script>(function(){var t=localStorage.getItem('kcube.theme')||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');document.documentElement.setAttribute('data-theme',t);})()</script>
 </head>
 <body class="auth-page">
   <header class="site-head">
@@ -12,6 +13,7 @@
       <a href="index.html" class="logo-link"><span class="logo">kCube</span></a>
       <span class="tag">roll-to-match puzzle</span>
     </div>
+    <button id="themeBtn" type="button" class="link-btn">Light</button>
   </header>
 
   <main class="auth-main">

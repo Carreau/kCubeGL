@@ -1,4 +1,5 @@
 import * as api from './api.mjs';
+import { initTheme, bindThemeBtn } from './theme.mjs';
 
 const $ = (id) => document.getElementById(id);
 
@@ -224,4 +225,7 @@ async function boot() {
   $('skipPasskeyBtn').addEventListener('click', () => { location.href = returnUrl(); });
 }
 
+initTheme();
+const themeBtn = document.getElementById('themeBtn');
+if (themeBtn) bindThemeBtn(themeBtn);
 boot();
