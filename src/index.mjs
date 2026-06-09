@@ -6,10 +6,11 @@
  * can be sorted by difficulty signals — failure rate, how far players land from
  * the scramble's optimal, cube count, or name.
  *
- * Works against the optional backend (server/server.mjs) but degrades cleanly:
- * with no server it renders the same catalogue from the deterministic
- * src/shared.mjs definitions and your locally-saved best scores — just without
- * leaderboards or cross-player difficulty stats.
+ * The server (server/server.mjs) is the source of truth for the catalogue,
+ * leaderboards and difficulty stats. If it's briefly unreachable we fall back to
+ * a cold-start cache — the same catalogue computed from the deterministic
+ * src/shared.mjs definitions plus your locally-saved best scores — so the page
+ * still renders and you can keep playing until the connection returns.
  * ========================================================================== */
 
 import * as api from "./api.mjs";
@@ -96,11 +97,12 @@ async function renderMyStats() {
 
 /* --- puzzle catalogue ------------------------------------------------------- */
 
-// Offline fallback: the deterministic catalogue + your locally-saved bests.
-function offlinePuzzles() {
+// Cold-start cache: when the server can't be reached, render the same catalogue
+// from the deterministic definitions plus your locally-saved bests.
+function cachedCatalog() {
   const local = readLocalBest();
   return buildCatalog().map((p) => ({
-    id: p.name,           // offline has no DB id; the name is the key everywhere
+    id: p.name,           // no DB id without the server; the name is the key everywhere
     name: p.name,
     numCubes: p.numCubes,
     scramble: p.scramble,
@@ -129,7 +131,7 @@ const nullLast = (v) => (v == null ? -Infinity : v);
 
 async function loadGrid() {
   let puzzles = state.online ? await api.listPuzzles() : null;
-  if (!Array.isArray(puzzles)) puzzles = offlinePuzzles();
+  if (!Array.isArray(puzzles)) puzzles = cachedCatalog();
   state.puzzles = puzzles;
   renderGrid();
 }
@@ -189,8 +191,8 @@ async function openDetail(name) {
   if (!info) {
     body.innerHTML =
       `<h2>${esc(name)}</h2>` +
-      `<p class="muted">Leaderboards &amp; difficulty stats need the server. ` +
-      `Run <code>npm start</code> and sign in.</p>` +
+      `<p class="muted">Leaderboards &amp; difficulty stats will load once the ` +
+      `server is reachable again. You can still play the puzzle now.</p>` +
       `<button class="primary" type="button" id="detailPlay">Play ${esc(name)}</button>`;
     $("detailPlay").addEventListener("click", () => go(name));
     return;

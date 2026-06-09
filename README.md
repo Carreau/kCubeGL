@@ -22,14 +22,17 @@ database file (`server/kcube.sqlite`) is created on first run.
 
 Then open <http://localhost:8080>, pick a puzzle, and play.
 
-### Without the backend
+### If the server is unreachable
 
-The game still runs as plain static files — the API client degrades gracefully
-to `localStorage` (your best scores are kept, but there are no accounts or
-leaderboards):
+The backend is the source of truth for accounts, the catalogue, leaderboards and
+difficulty stats, but the client is resilient: if the server is briefly
+unreachable it falls back to a cold-start cache — the same catalogue computed
+locally plus your `localStorage` best scores — so you can keep playing until the
+connection returns. You can also serve the game as plain static files (no
+accounts or leaderboards) for a CDN-only deploy:
 
 ```bash
-npm run static       # static-only server (the old behaviour)
+npm run static       # static-only server (no backend)
 # or
 python3 -m http.server 8080
 ```
@@ -110,7 +113,7 @@ admin.html         admin page: user management + featured-puzzle pin/order
 src/index.mjs      landing-page logic (catalogue grid, sorting, account, detail)
 src/admin.mjs      admin-page logic (users + puzzle pin/order)
 src/main.js        game logic, board generation, rendering and roll animation
-src/api.mjs        offline-safe browser client for the backend API
+src/api.mjs        resilient browser client for the backend API
 src/shared.mjs     dependency-free puzzle catalogue + math shared by game + server
 src/styles.css     HUD, landing page, admin and overlay styling
 server/server.mjs  HTTP server: static files + JSON API (node:http)
@@ -127,7 +130,7 @@ condition, herding-aware move budget, carried bonus, Q/E view rotation,
 show-solution playback, win/lose flow; a real **level-picker landing page**, an
 optional **SQLite backend** with **username accounts**, **leaderboards**, and
 per-attempt tracking feeding **puzzle-difficulty** and **player-skill** stats.
-Best scores persist locally too, so the game still works with no backend.
+Best scores also persist locally, so a brief server hiccup never blocks play.
 Deliberately left out for now: passwords/sessions, sound, timer and undo.
 
 ## License
