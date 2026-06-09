@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { mulberry32, shuffle, buildCatalog, catalogByName } from "./shared.mjs";
 import * as api from "./api.mjs";
+import { bfsSolve, greedySolve, ROLL_DR, ROLL_DC } from "./solver.mjs";
 
 /* ============================================================================
  * kCube — a 3D dice-rolling puzzle.
@@ -777,6 +778,70 @@ function afterMove() {
 
 /* --- Show solution ---------------------------------------------------------- */
 
+// Convert a THREE.Quaternion to a solver face array [+X,-X,+Y,-Y,+Z,-Z].
+// Each slot stores the colour id of the face that currently points in that
+// world direction. faces[2] is the top colour (used as the win criterion).
+const _solverTmp = new THREE.Vector3();
+const _solverDirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+function quatToFaces(quat) {
+  const faces = new Array(6);
+  for (const fa of FACE_AXES) {
+    _solverTmp.copy(fa.v).applyQuaternion(quat);
+    let best = 0, bestDot = -Infinity;
+    for (let i = 0; i < 6; i++) {
+      const [dx, dy, dz] = _solverDirs[i];
+      const dot = _solverTmp.x * dx + _solverTmp.y * dy + _solverTmp.z * dz;
+      if (dot > bestDot) { bestDot = dot; best = i; }
+    }
+    faces[best] = fa.color;
+  }
+  return faces;
+}
+
+// Build the pure solver state from the stored initial snapshot so the solver
+// always starts from the scrambled board regardless of what the player has done.
+function extractInitialSolverState() {
+  const firstCube = game.solution.length ? game.solution[0].cube : game.cubes[0];
+  const cursorId = game.cubes.indexOf(firstCube);
+  return {
+    cubes: game.initial.map((snap, i) => ({
+      id: i,
+      r: snap.row,
+      c: snap.col,
+      faces: quatToFaces(snap.quat),
+    })),
+    cursorId,
+  };
+}
+
+// Convert solver output [{id, dir}] to the game solution format [{cube, key}].
+function solverSolutionToGame(solverMoves) {
+  return solverMoves.map(m => ({ cube: game.cubes[m.id], key: m.dir }));
+}
+
+// Try BFS then greedy to find a solution at least as good as the stored one.
+// Updates game.solution in place if a shorter (or equally short) path is found.
+// BFS gives the provably optimal roll count; greedy is a fast fallback.
+function tryImproveWithSolver() {
+  if (!game.initial.length) return;
+  const solverState = extractInitialSolverState();
+
+  const bfs = bfsSolve(solverState);
+  if (bfs && bfs.length <= game.solution.length) {
+    if (DEBUG_SOLVE)
+      console.log(`[solver] BFS: ${bfs.length} rolls (stored ${game.solution.length})`);
+    game.solution = solverSolutionToGame(bfs);
+    return;
+  }
+
+  const greedy = greedySolve(solverState);
+  if (greedy && greedy.length < game.solution.length) {
+    if (DEBUG_SOLVE)
+      console.log(`[solver] greedy: ${greedy.length} rolls (stored ${game.solution.length})`);
+    game.solution = solverSolutionToGame(greedy);
+  }
+}
+
 function restoreInitial() {
   for (const s of game.initial) {
     s.cube.setCell(s.row, s.col);
@@ -789,6 +854,7 @@ function showSolution() {
   if (game.anim || game.solving) return;
   if (game.state !== "playing" && game.state !== "lost") return;
   if (game.solution.length === 0) return;
+  tryImproveWithSolver(); // replace game.solution if BFS/greedy finds a shorter path
   hideOverlay();
   restoreInitial(); // rewind to the scrambled start
   game.solving = true;
