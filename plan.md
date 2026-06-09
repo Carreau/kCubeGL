@@ -254,3 +254,202 @@ This is a solo project at v1. Future contributors should:
 2. Preserve the "no-build-step" principle unless adding a significant feature requires it
 3. Test changes with `npm test` and manual play before pushing
 4. Update CLAUDE.md and plan.md if architecture changes
+
+---
+
+## Color-Specific Win UI — Implementation Plan
+
+This section is the step-by-step plan for building the **colour-target picker** described above (the UI half of "Per-Color Best Scores", deliverable first because it has zero backend dependency).
+
+### Goal
+
+Players can optionally lock the win condition to a specific face colour. When locked, winning requires all cubes to show *that exact colour* on top (plus contiguity — unchanged). When unlocked ("Any"), the existing behaviour is preserved. The setting persists across reloads via `localStorage`.
+
+### Current state
+
+| What | Location | Note |
+|---|---|---|
+| `isUniform()` | `src/main.js:431` | Checks `cubes[0].topColor` — any uniform colour wins |
+| `game.targetColor` | `src/main.js` game object | Exists but **not** enforced in win check |
+| `COLORS` array | `src/main.js:35` | `[{name, hex}, …]` — 6 entries, index = face id |
+| `FACE_AXES` | `src/level-gen.mjs:27` | Maps cube-local axis → colour index |
+
+### Step 1 — Game state field `game.winColor`
+
+Add `winColor: null` to the `game` object literal (nullable number, `null` = any colour, `0..5` = specific colour).
+
+On `buildLevel()` / `initGame()` do **not** reset it — the preference should survive puzzle transitions.
+
+On page load restore from `localStorage`:
+```js
+const saved = localStorage.getItem("kcube.winColor");
+game.winColor = saved !== null && saved !== "-1" ? Number(saved) : null;
+```
+
+### Step 2 — Update `isUniform()`
+
+```js
+function isUniform() {
+  if (game.cubes.length === 0) return false;
+  const target = game.winColor ?? game.cubes[0].topColor;
+  return game.cubes.every((c) => c.topColor === target);
+}
+```
+
+No other win-path logic changes.
+
+### Step 3 — Export `COLORS` to `src/shared.mjs`
+
+`COLORS` is currently defined only in `src/main.js` (Three.js-free data).  
+Move the array to `src/shared.mjs` so the landing page and any future pure code can use it without importing the game module:
+
+```js
+// src/shared.mjs
+export const COLORS = [
+  { name: "white",  hex: 0xf2f3f5 },
+  { name: "yellow", hex: 0xffd23f },
+  { name: "red",    hex: 0xe5484d },
+  { name: "orange", hex: 0xff7a1a },
+  { name: "blue",   hex: 0x3aa0ff },
+  { name: "green",  hex: 0x3ecf6b },
+];
+```
+
+`src/main.js` imports it: `import { COLORS, … } from "./shared.mjs";` and removes the local definition.
+
+### Step 4 — HTML widget (`play.html`)
+
+Insert the picker row immediately after the moves HUD line, inside the existing top HUD element:
+
+```html
+<div id="win-color-picker" aria-label="Target colour for win">
+  <span class="wcp-label">Win with</span>
+  <button class="wcp-swatch wcp-any active" data-color="-1" title="Any colour">any</button>
+  <button class="wcp-swatch" data-color="0" style="--sc:#f2f3f5" title="White"></button>
+  <button class="wcp-swatch" data-color="1" style="--sc:#ffd23f" title="Yellow"></button>
+  <button class="wcp-swatch" data-color="2" style="--sc:#e5484d" title="Red"></button>
+  <button class="wcp-swatch" data-color="3" style="--sc:#ff7a1a" title="Orange"></button>
+  <button class="wcp-swatch" data-color="4" style="--sc:#3aa0ff" title="Blue"></button>
+  <button class="wcp-swatch" data-color="5" style="--sc:#3ecf6b" title="Green"></button>
+</div>
+```
+
+Also add a small inline indicator next to the "best" badge in the HUD:
+```html
+<span id="win-target-dot" hidden title="Target colour"></span>
+```
+
+### Step 5 — CSS (`src/styles.css`)
+
+```css
+#win-color-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.wcp-label {
+  font-size: 0.65rem;
+  color: #888;
+  margin-right: 2px;
+  white-space: nowrap;
+}
+.wcp-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--sc, #444);
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s, border-color 0.12s;
+}
+.wcp-swatch.active {
+  border-color: #fff;
+  transform: scale(1.3);
+}
+.wcp-any {
+  background: #2a2a2a;
+  font-size: 0.5rem;
+  color: #999;
+  line-height: 1;
+}
+#win-target-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 4px;
+  vertical-align: middle;
+  background: #fff; /* overwritten by JS */
+}
+```
+
+### Step 6 — JS wiring (`src/main.js`)
+
+```js
+// --- colour-target picker ---
+
+function syncWinColorPicker() {
+  const active = game.winColor ?? -1;
+  document.querySelectorAll("#win-color-picker .wcp-swatch").forEach((btn) => {
+    btn.classList.toggle("active", Number(btn.dataset.color) === active);
+    btn.disabled = game.state === "won" || game.state === "lost";
+  });
+  const dot = document.getElementById("win-target-dot");
+  if (game.winColor !== null) {
+    const hex = COLORS[game.winColor].hex.toString(16).padStart(6, "0");
+    dot.style.background = `#${hex}`;
+    dot.hidden = false;
+  } else {
+    dot.hidden = true;
+  }
+}
+
+document.getElementById("win-color-picker").addEventListener("click", (e) => {
+  const btn = e.target.closest(".wcp-swatch");
+  if (!btn || btn.disabled) return;
+  const v = Number(btn.dataset.color);
+  game.winColor = v === -1 ? null : v;
+  localStorage.setItem("kcube.winColor", game.winColor ?? -1);
+  syncWinColorPicker();
+});
+```
+
+Call `syncWinColorPicker()` from:
+- Page load (after restoring from localStorage)
+- `updateHud()` (keeps dot in sync on every HUD refresh)
+- After entering won/lost state (disables swatches)
+- After entering playing state from retry/next (re-enables swatches)
+
+### Step 7 — Overlay hint text
+
+In the "Out of moves" overlay body, show the target if one is set:
+
+```js
+const colourName = game.winColor !== null ? COLORS[game.winColor].name : null;
+const hint = colourName
+  ? `Get all cubes showing <strong>${colourName}</strong> on top in one connected block.`
+  : "Get every cube showing the same colour on top in one connected block.";
+```
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `src/shared.mjs` | Add + export `COLORS` array |
+| `src/main.js` | Import `COLORS` from shared; add `game.winColor`; update `isUniform()`; add picker wiring + `syncWinColorPicker()`; update overlay hint; call sync from `updateHud()` and state transitions |
+| `play.html` | `#win-color-picker` widget; `#win-target-dot` span |
+| `src/styles.css` | Swatch, picker row, and dot styles |
+
+Backend untouched for now. `winColor` threading into `finalizeAttempt` and `localStorage` schema bump are the next step (tracked above in "Rollout order").
+
+### Acceptance criteria
+
+1. Default: picker shows "any" active; existing win behaviour unchanged.
+2. Selecting a colour locks win to that colour — uniform-but-wrong colour does **not** trigger a win.
+3. Clicking the active swatch (or "any") clears the target back to `null`.
+4. Preference survives page reload (localStorage).
+5. Swatches are disabled after win/loss overlay appears and re-enabled on retry/next.
+6. HUD dot appears/disappears correctly as target is set/cleared.
+7. `npm run check` passes; `npm test` smoke still green.
