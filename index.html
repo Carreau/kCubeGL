@@ -37,18 +37,15 @@
     <section class="levels">
       <div class="levels-head">
         <h2>Puzzles</h2>
-        <label class="count muted">
-          Sort by
-          <select id="sortBy">
-            <option value="featured">Featured</option>
-            <option value="fail">Hardest — failure rate</option>
-            <option value="over">Hardest — moves over scramble</option>
-            <option value="effort">Hardest — search effort</option>
-            <option value="scramble">Most scrambled</option>
-            <option value="cubes">Most cubes</option>
-            <option value="name">Name</option>
-          </select>
-        </label>
+        <div class="sort-bar" id="sortBar" role="group" aria-label="Sort puzzles">
+          <button class="sort-chip active" data-sort="featured">★ Featured</button>
+          <button class="sort-chip" data-sort="fail">Fail rate <span class="sort-dir">↓</span></button>
+          <button class="sort-chip" data-sort="over">Moves gap <span class="sort-dir">↓</span></button>
+          <button class="sort-chip" data-sort="effort">Effort <span class="sort-dir">↓</span></button>
+          <button class="sort-chip" data-sort="scramble">Scramble <span class="sort-dir">↓</span></button>
+          <button class="sort-chip" data-sort="cubes">Cubes <span class="sort-dir">↓</span></button>
+          <button class="sort-chip" data-sort="name">Name <span class="sort-dir">↑</span></button>
+        </div>
       </div>
       <div id="grid" class="grid" aria-live="polite"></div>
     </section>

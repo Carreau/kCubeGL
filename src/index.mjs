@@ -18,7 +18,7 @@ import { buildCatalog, gravatarUrl, gravatarUrlForHash } from "./shared.mjs";
 
 const LOCAL_KEY = "kcube.v1"; // same store the game writes best scores to
 
-const state = { online: false, user: null, puzzles: [], sort: "featured" };
+const state = { online: false, user: null, puzzles: [], sort: "featured", sortDir: "desc" };
 
 const $ = (id) => document.getElementById(id);
 
@@ -134,30 +134,53 @@ function cachedCatalog() {
   }));
 }
 
-// Comparators for each sort key. Nulls always sort last for "harder = higher".
-const nullLast = (v) => (v == null ? -Infinity : v);
-
-// Nulls-last descending comparison with a tiebreaker.
-function nullLastDesc(av, bv, ...tiebreakers) {
-  if (av === null && bv === null) return tiebreakers.reduce((r, f) => r || f(), 0);
-  if (av === null) return 1;
-  if (bv === null) return -1;
-  return bv - av || tiebreakers.reduce((r, f) => r || f(), 0);
-}
-
-const SORTS = {
-  featured: null, // keep server/catalogue order (pinned first)
-  fail: (a, b) => (b.failRate || 0) - (a.failRate || 0) || a.name.localeCompare(b.name),
-  over: (a, b) => nullLast(overScramble(b)) - nullLast(overScramble(a)) || a.name.localeCompare(b.name),
-  effort: (a, b) => nullLastDesc(
-    a.minBeamWidth ?? null, b.minBeamWidth ?? null,
-    () => b.scramble - a.scramble,
-    () => a.name.localeCompare(b.name)
-  ),
-  scramble: (a, b) => b.scramble - a.scramble || a.name.localeCompare(b.name),
-  cubes: (a, b) => b.numCubes - a.numCubes || a.name.localeCompare(b.name),
-  name: (a, b) => a.name.localeCompare(b.name),
+// Default direction for each sort key (null = no direction toggle, e.g. featured).
+const SORT_DEFAULT_DIR = {
+  featured: null, fail: "desc", over: "desc", effort: "desc",
+  scramble: "desc", cubes: "desc", name: "asc",
 };
+
+// Null-last sentinels for ascending and descending numeric comparisons.
+const nlD = (v) => (v == null ? -Infinity : v); // desc: nulls sort last
+const nlA = (v) => (v == null ? Infinity : v);  // asc:  nulls sort last
+
+// Return a comparator for the given sort key and direction.
+function getSortFn(key, dir) {
+  if (key === "featured") return null;
+  const tb = (a, b) => a.name.localeCompare(b.name);
+  if (dir === "desc") {
+    switch (key) {
+      case "fail":    return (a, b) => (b.failRate || 0) - (a.failRate || 0) || tb(a, b);
+      case "over":    return (a, b) => nlD(overScramble(b)) - nlD(overScramble(a)) || tb(a, b);
+      case "effort":  return (a, b) => {
+        const av = a.minBeamWidth ?? null, bv = b.minBeamWidth ?? null;
+        if (av === null && bv === null) return b.scramble - a.scramble || tb(a, b);
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return bv - av || b.scramble - a.scramble || tb(a, b);
+      };
+      case "scramble": return (a, b) => b.scramble - a.scramble || tb(a, b);
+      case "cubes":    return (a, b) => b.numCubes - a.numCubes || tb(a, b);
+      case "name":     return (a, b) => b.name.localeCompare(a.name);
+    }
+  } else {
+    switch (key) {
+      case "fail":    return (a, b) => (a.failRate || 0) - (b.failRate || 0) || tb(a, b);
+      case "over":    return (a, b) => nlA(overScramble(a)) - nlA(overScramble(b)) || tb(a, b);
+      case "effort":  return (a, b) => {
+        const av = a.minBeamWidth ?? null, bv = b.minBeamWidth ?? null;
+        if (av === null && bv === null) return a.scramble - b.scramble || tb(a, b);
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return av - bv || a.scramble - b.scramble || tb(a, b);
+      };
+      case "scramble": return (a, b) => a.scramble - b.scramble || tb(a, b);
+      case "cubes":    return (a, b) => a.numCubes - b.numCubes || tb(a, b);
+      case "name":     return tb;
+    }
+  }
+  return null;
+}
 
 async function loadGrid() {
   let puzzles = state.online ? await api.listPuzzles() : null;
@@ -196,7 +219,7 @@ function cardHtml(p) {
 // order) and an "All puzzles" group (the rest), each sorted by the active key.
 // With nothing pinned, fall back to a single ungrouped grid.
 function renderGrid() {
-  const cmp = SORTS[state.sort];
+  const cmp = getSortFn(state.sort, state.sortDir);
   const sortGroup = (arr) => (cmp ? [...arr].sort(cmp) : arr);
   const grid = $("grid");
 
@@ -295,8 +318,27 @@ $("detailClose").addEventListener("click", closeDetail);
 $("detail").addEventListener("click", (e) => { if (e.target.id === "detail") closeDetail(); });
 window.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetail(); });
 
-$("sortBy").addEventListener("change", (e) => {
-  state.sort = e.target.value;
+function updateSortChips() {
+  document.querySelectorAll(".sort-chip").forEach((chip) => {
+    const key = chip.dataset.sort;
+    const active = key === state.sort;
+    chip.classList.toggle("active", active);
+    const dirEl = chip.querySelector(".sort-dir");
+    if (dirEl) dirEl.textContent = state.sortDir === "desc" ? "↓" : "↑";
+  });
+}
+
+$("sortBar").addEventListener("click", (e) => {
+  const chip = e.target.closest(".sort-chip");
+  if (!chip) return;
+  const key = chip.dataset.sort;
+  if (key === state.sort && SORT_DEFAULT_DIR[key] !== null) {
+    state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+  } else {
+    state.sort = key;
+    state.sortDir = SORT_DEFAULT_DIR[key] ?? "desc";
+  }
+  updateSortChips();
   renderGrid();
 });
 
