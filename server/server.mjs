@@ -85,6 +85,14 @@ function getRpId(req) {
   return host.split(':')[0];
 }
 
+// Map a wildcard/loopback bind address to "localhost" for display: it's
+// reachable, clickable, a secure context, and a valid WebAuthn RP ID (a bare
+// IP is none of those for passkeys).
+const LOOPBACK_HOSTS = new Set(['0.0.0.0', '127.0.0.1', '::', '::1', '']);
+function displayHost(host) {
+  return LOOPBACK_HOSTS.has(host) ? 'localhost' : host;
+}
+
 /* --- static files ----------------------------------------------------------- */
 
 async function serveStatic(req, res, pathname) {
@@ -371,7 +379,11 @@ export function startServer({ dbPath, port = 8080, host = "127.0.0.1" } = {}) {
   return new Promise((resolve) => {
     server.listen(port, host, () => {
       const addr = server.address();
-      const url = `http://${host}:${addr.port}/`;
+      // Prefer "localhost" in the URL when bound to a wildcard/loopback
+      // address. Browsers treat localhost as a secure context AND accept it as
+      // a WebAuthn RP ID, whereas a bare IP (0.0.0.0 / 127.0.0.1) is rejected
+      // as an RP ID — which would make passkey registration fail.
+      const url = `http://${displayHost(host)}:${addr.port}/`;
       resolve({ server, db, url, port: addr.port, close: () => { server.close(); db.close(); } });
     });
   });

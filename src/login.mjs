@@ -52,17 +52,32 @@ function setStatus(msg, isErr = false) {
 
 function clearStatus() { $('authStatus').classList.add('hidden'); }
 
+// Passkeys (WebAuthn) only work in a "secure context": HTTPS, or a loopback
+// host (localhost / 127.0.0.1 / [::1]). On a plain-HTTP dev server reached
+// over the network the browser throws a SecurityError, so we check this up
+// front rather than letting navigator.credentials.* fail mysteriously.
+function secureContextOk() {
+  if (typeof window !== 'undefined' && 'isSecureContext' in window) return window.isSecureContext;
+  return location.protocol === 'https:' ||
+    ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+}
+
 async function passkeyAvailable() {
+  if (!secureContextOk()) return false;
   if (typeof PublicKeyCredential === 'undefined') return false;
   try {
     return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
   } catch { return false; }
 }
 
+const INSECURE_MSG =
+  'Passkeys need a secure connection — open the site over https:// or on http://localhost.';
+
 /* --- passkey login ---------------------------------------------------------- */
 
 async function doPasskeyLogin() {
   clearStatus();
+  if (!secureContextOk()) { setStatus(INSECURE_MSG, true); return; }
   try {
     const options = await api.getPasskeyLoginOptions();
     if (!options) { setStatus('Could not reach server.', true); return; }
@@ -84,7 +99,11 @@ async function doPasskeyLogin() {
     api.setToken(result.token);
     location.href = returnUrl();
   } catch (e) {
-    setStatus(e?.name === 'NotAllowedError' ? 'Passkey sign-in was cancelled.' : `Passkey sign-in failed: ${e?.message || e}`, true);
+    let msg;
+    if (e?.name === 'NotAllowedError') msg = 'Passkey sign-in was cancelled.';
+    else if (e?.name === 'SecurityError') msg = INSECURE_MSG;
+    else msg = `Passkey sign-in failed: ${e?.message || e}`;
+    setStatus(msg, true);
   }
 }
 
@@ -100,8 +119,16 @@ async function doRegister(e) {
   $('registerBtn').disabled = true;
   try {
     await api.createUser(name);
+    // The account now exists and api.createUser() has stored its session token,
+    // so the player is already signed in. Only offer the passkey step when it
+    // can actually work; on a dev server without a secure context we'd just be
+    // dangling a button that throws, so continue straight into the session.
     $('registerForm').classList.add('hidden');
-    $('addPasskeyArea').classList.remove('hidden');
+    if (await passkeyAvailable()) {
+      $('addPasskeyArea').classList.remove('hidden');
+    } else {
+      location.href = returnUrl();
+    }
   } catch (ex) {
     errEl.textContent = ex?.status === 409 ? 'Name taken — try another.' : "Couldn't create account. Is the server running?";
     errEl.classList.remove('hidden');
@@ -113,6 +140,7 @@ async function doRegister(e) {
 
 async function doAddPasskey() {
   clearStatus();
+  if (!secureContextOk()) { setStatus(INSECURE_MSG, true); return; }
   try {
     const options = await api.getPasskeyRegisterOptions();
     if (!options) { setStatus('Could not get passkey options from server.', true); return; }
@@ -140,6 +168,8 @@ async function doAddPasskey() {
   } catch (e) {
     if (e?.name === 'NotAllowedError') {
       setStatus('Passkey creation was cancelled.', true);
+    } else if (e?.name === 'SecurityError') {
+      setStatus(INSECURE_MSG, true);
     } else if (e?.status) {
       setStatus(`Passkey error: ${e.message}`, true);
     } else {
@@ -160,6 +190,10 @@ async function boot() {
   if (online && await passkeyAvailable()) {
     $('passkeyLoginArea').classList.remove('hidden');
     $('passkeyLoginBtn').addEventListener('click', doPasskeyLogin);
+  } else if (online && !secureContextOk() && typeof PublicKeyCredential !== 'undefined') {
+    // The device supports passkeys but this origin can't use them — tell the
+    // player why the sign-in button is missing instead of leaving them stuck.
+    setStatus(INSECURE_MSG, true);
   }
 
   $('registerForm').addEventListener('submit', doRegister);
