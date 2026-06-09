@@ -25,6 +25,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
 import { buildCatalog } from "../src/shared.mjs";
+import { solveCatalogPuzzle } from "../src/catalog-solve.mjs";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -62,6 +63,9 @@ CREATE TABLE IF NOT EXISTS puzzles (
   optimal     INTEGER,                   -- shortest known solve (client-reported)
   pinned      INTEGER NOT NULL DEFAULT 0,-- admin "feature this first" flag
   sort_order  INTEGER NOT NULL DEFAULT 0,-- admin ordering among pinned puzzles
+  full_optimal INTEGER,                  -- full solver (BFS) optimal roll count
+  beam_moves   INTEGER,                  -- beam-search approximate roll count
+  solved_at    INTEGER,                  -- when the solver was last run (null = never)
   created_at  INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -83,11 +87,24 @@ CREATE INDEX IF NOT EXISTS idx_attempts_won         ON attempts(puzzle_id, outco
 
 const now = () => Date.now();
 
+// Add a column if it isn't already present (node:sqlite throws on a duplicate
+// ALTER, so we probe the table schema first). Lets older DBs gain new columns.
+function ensureColumn(db, table, column, def) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+  }
+}
+
 export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  // Migrations for DBs created before these columns existed.
+  ensureColumn(db, "puzzles", "full_optimal", "INTEGER");
+  ensureColumn(db, "puzzles", "beam_moves", "INTEGER");
+  ensureColumn(db, "puzzles", "solved_at", "INTEGER");
   const wrapped = new Db(db);
   wrapped.seedCatalog();
   return wrapped;
@@ -248,6 +265,24 @@ export class Db {
     this.db.prepare(
       "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
     ).run(optimal, puzzleId, optimal);
+  }
+
+  // Run the solvers (full/BFS + beam) for one puzzle and persist the results.
+  // This is an explicit, admin-triggered step: reproducing the board and running
+  // BFS can take a few seconds on the hardest boards, so we never do it at boot.
+  // Returns the stored difficulty signals. `fullOptimal`/`beamMoves` are null
+  // when that solver found no solution within its search budget.
+  solvePuzzle(puzzleId) {
+    const row = this.puzzleById(puzzleId);
+    if (!row) throw new Error(`puzzle ${puzzleId} not found`);
+    const r = solveCatalogPuzzle({
+      seed: row.seed, numCubes: row.num_cubes, scramble: row.scramble,
+    });
+    const ts = now();
+    this.db.prepare(
+      "UPDATE puzzles SET full_optimal = ?, beam_moves = ?, solved_at = ? WHERE id = ?"
+    ).run(r.bfs ?? null, r.beam ?? null, ts, puzzleId);
+    return { fullOptimal: r.bfs ?? null, beamMoves: r.beam ?? null, solvedAt: ts };
   }
 
   /* --- admin: puzzle ordering ------------------------------------------------- */
@@ -445,7 +480,7 @@ export class Db {
     const rows = this.db.prepare(
       `SELECT
          p.id, p.name, p.seed, p.num_cubes, p.scramble, p.par, p.optimal,
-         p.pinned, p.sort_order,
+         p.pinned, p.sort_order, p.full_optimal, p.beam_moves, p.solved_at,
          (SELECT MIN(moves_used) FROM attempts a
             WHERE a.puzzle_id = p.id AND a.outcome = 'won') AS world_best,
          (SELECT COUNT(DISTINCT user_id) FROM attempts a
@@ -485,6 +520,11 @@ export class Db {
         winRate,
         failRate: attempts ? 1 - winRate : 0,
         avgMoves: r.avg_moves ?? null,
+        // Solver difficulty signals — populated by the admin-triggered solver run
+        // (db.solvePuzzle). solvedAt is null until the solver has been run.
+        fullOptimal: r.full_optimal ?? null, // full solver: provably-optimal roll count
+        beamMoves: r.beam_moves ?? null,     // beam-search approximate roll count
+        solvedAt: r.solved_at ?? null,
       };
     });
   }
