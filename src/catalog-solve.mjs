@@ -42,10 +42,20 @@ export function solveCatalogPuzzle(config, opts = {}) {
   const bfs = bfsSolve(state, opts.bfs);
   const beam = beamSolve(state, opts.beam);
   const effort = minBeamWidthToSolve(state, opts.effort);
+
+  // Per-target-color beam: run beamSolve for each of the 6 face colours so the
+  // admin can see which winning colour is easiest/hardest to reach.
+  const colorBeams = {};
+  for (let color = 0; color < 6; color++) {
+    const result = beamSolve(state, { ...(opts.beam ?? {}), targetColor: color });
+    colorBeams[color] = result ? result.length : null;
+  }
+
   return {
     optimal: solutionLen,
     bfs: bfs ? bfs.length : null,
     beam: beam ? beam.length : null,
     searchWidth: effort ? effort.width : null,
+    colorBeams,
   };
 }
