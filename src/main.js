@@ -258,9 +258,9 @@ for (let r = 0; r < BOARD; r++) {
   }
 }
 
-// Asymmetric tetrahedron cursor: tip points toward world -Z (= ArrowUp/"north").
-// rotation.y is never updated, so as the camera orbits the tetrahedron pivots in
-// screen space, always showing the player where the Up key sends the cube.
+// Asymmetric tetrahedron cursor: tip starts pointing toward world -Z (= "north").
+// rotation.y tracks camYaw in the render loop so the tip always points toward the
+// visual "up" direction, matching where ArrowUp sends the cube.
 const cursor = new THREE.Group();
 {
   const mat = new THREE.MeshStandardMaterial({
@@ -968,8 +968,9 @@ function loop(now) {
     applyCamera();
   }
 
-  // cursor bobs; rotation.y stays 0 so the north tip always points world -Z
+  // cursor bobs and rotates with the camera so the tip always points visual-up
   cursor.position.y = S + 0.55 + Math.sin(now * 0.004) * 0.07;
+  cursor.rotation.y = camYaw;
 
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
