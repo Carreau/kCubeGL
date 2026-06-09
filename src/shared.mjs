@@ -19,6 +19,17 @@
 
 export const BOARD = 5; // 5×5 grid (kept in sync with src/main.js)
 
+// Six distinct face colours — index doubles as the face id.
+// Kept in shared.mjs (pure, no DOM) so the landing page and server can use it.
+export const COLORS = [
+  { name: "white",  hex: 0xf2f3f5 },
+  { name: "yellow", hex: 0xffd23f },
+  { name: "red",    hex: 0xe5484d },
+  { name: "orange", hex: 0xff7a1a },
+  { name: "blue",   hex: 0x3aa0ff },
+  { name: "green",  hex: 0x3ecf6b },
+];
+
 /* mulberry32 — a tiny, fast, deterministic 32-bit PRNG. Same seed ⇒ same
  * stream on every machine, which is what makes a puzzle reproducible. Returns a
  * function yielding floats in [0, 1) just like Math.random. */

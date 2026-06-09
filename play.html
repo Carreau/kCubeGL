@@ -35,6 +35,16 @@
         <span class="badge">Moves <b id="moves">0</b></span>
         <button id="infoBtn" type="button" class="info-btn" title="Show info">ⓘ</button>
       </div>
+      <div id="win-color-picker" aria-label="Target colour for win">
+        <span class="wcp-label">Win with</span>
+        <button class="wcp-swatch wcp-any active" data-color="-1" title="Any colour">any</button>
+        <button class="wcp-swatch" data-color="0" style="--sc:#f2f3f5" title="White"></button>
+        <button class="wcp-swatch" data-color="1" style="--sc:#ffd23f" title="Yellow"></button>
+        <button class="wcp-swatch" data-color="2" style="--sc:#e5484d" title="Red"></button>
+        <button class="wcp-swatch" data-color="3" style="--sc:#ff7a1a" title="Orange"></button>
+        <button class="wcp-swatch" data-color="4" style="--sc:#3aa0ff" title="Blue"></button>
+        <button class="wcp-swatch" data-color="5" style="--sc:#3ecf6b" title="Green"></button>
+      </div>
       <div class="hud-row tools">
         <button id="solveBtn" type="button">Show solution</button>
         <button id="menuBtn" type="button">Puzzles</button>
@@ -46,7 +56,7 @@
       <div class="info-content">
         <div class="info-section">
           <h3>Objective</h3>
-          <p>Make every cube show the same colour on top <b>and</b> form one connected block (touching N/S/E/W).</p>
+          <p>Make every cube show the same colour on top <b>and</b> form one connected block (touching N/S/E/W). Use the <em>Win with</em> picker to require a specific colour.</p>
         </div>
         <div class="info-row">
           <div class="info-stat">
@@ -56,6 +66,7 @@
           <div class="info-stat">
             <span class="label">Best</span>
             <span class="value" id="info-best">–</span>
+            <span id="win-target-dot" hidden title="Target colour"></span>
           </div>
           <div class="info-stat">
             <span class="label">World</span>
