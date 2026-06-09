@@ -17,7 +17,7 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join, normalize, extname } from "node:path";
+import { dirname, join, normalize, extname, sep } from "node:path";
 import { openDb } from "./db.mjs";
 import { generateChallenge, verifyRegistration, verifyAssertion } from './webauthn.mjs';
 
@@ -80,15 +80,27 @@ const cleanName = (v) => {
 };
 const VALID_OUTCOME = new Set(["won", "lost", "abandoned"]);
 
+// Bootstrap secret: a user who presents this at registration becomes admin.
+// Unset (the default) means no new admins can be minted via the API. Read at
+// use-time (not cached) so tests can set it before the first request.
+const adminToken = () => process.env.KCUBE_ADMIN_TOKEN || null;
+// Only trust X-Forwarded-* when we're knowingly behind a proxy. Otherwise a
+// client could spoof those headers to steer the WebAuthn origin/RP-ID.
+const trustProxy = () =>
+  process.env.KCUBE_TRUST_PROXY === "1" || process.env.KCUBE_TRUST_PROXY === "true";
+
+function fwdHost(req) {
+  return (trustProxy() && req.headers['x-forwarded-host']) || req.headers.host || 'localhost';
+}
+
 function getOrigin(req) {
-  const proto = req.headers['x-forwarded-proto'] || 'http';
-  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
-  return `${proto}://${host}`;
+  const proto = (trustProxy() && req.headers['x-forwarded-proto']) ||
+    (req.socket && req.socket.encrypted ? 'https' : 'http');
+  return `${proto}://${fwdHost(req)}`;
 }
 
 function getRpId(req) {
-  const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
-  return host.split(':')[0];
+  return fwdHost(req).split(':')[0];
 }
 
 // Map a wildcard/loopback bind address to "localhost" for display: it's
@@ -103,11 +115,17 @@ function displayHost(host) {
 
 async function serveStatic(req, res, pathname) {
   if (pathname === "/" || pathname === "") pathname = "/index.html";
-  if (BLOCKED.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
+  // Resolve against ROOT *first*: normalize() collapses any "../" so a request
+  // like /x/../server/db.mjs can't slip a blocked path past the checks below or
+  // escape ROOT entirely.
+  const full = normalize(join(ROOT, pathname));
+  if (full !== ROOT && !full.startsWith(ROOT + sep)) {
     res.writeHead(403); return res.end("forbidden");
   }
-  const full = normalize(join(ROOT, pathname));
-  if (!full.startsWith(ROOT)) { res.writeHead(403); return res.end("forbidden"); }
+  const rel = full.slice(ROOT.length).split(sep).join("/"); // e.g. "/server/db.mjs"
+  if (BLOCKED.some((p) => rel === p || rel.startsWith(p + "/"))) {
+    res.writeHead(403); return res.end("forbidden");
+  }
   try {
     const body = await readFile(full);
     res.writeHead(200, { "Content-Type": MIME[extname(full)] || "application/octet-stream" });
@@ -141,15 +159,20 @@ async function handleApi(req, res, url, db) {
     return sendJson(res, 200, { ok: true });
   }
 
-  // POST /api/users  { username }
+  // POST /api/users  { username, adminToken? }
+  // Anyone can register a username (the app has no passwords). Admin is granted
+  // only when the request carries the bootstrap secret KCUBE_ADMIN_TOKEN — there
+  // is intentionally no "first user becomes admin" magic.
   if (method === "POST" && parts[1] === "users" && parts.length === 2) {
     const body = await readJson(req);
     const username = typeof body.username === "string" ? body.username.trim() : "";
     if (username.length < 1 || username.length > 24) {
       return sendJson(res, 400, { error: "name must be 1–24 characters" });
     }
+    const secret = adminToken();
+    const admin = !!secret && body.adminToken === secret;
     try {
-      return sendJson(res, 201, db.createUser(username));
+      return sendJson(res, 201, db.createUser(username, { admin }));
     } catch (e) {
       if (e.code === "DUP") return sendJson(res, 409, { error: "name taken" });
       throw e;
@@ -217,9 +240,7 @@ async function handleApi(req, res, url, db) {
       return sendJson(res, 400, { error: "bad attempt update" });
     }
     // Find the attempt's puzzle (and confirm it's the caller's own open attempt).
-    const row = db.db
-      .prepare("SELECT puzzle_id FROM attempts WHERE id = ? AND user_id = ? AND outcome = 'in_progress'")
-      .get(id, u.id);
+    const row = db.openAttempt(id, u.id);
     if (!row) return sendJson(res, 404, { error: "no such open attempt" });
     const puzzleId = row.puzzle_id;
     const movesUsed = Math.max(0, toInt(body.movesUsed) ?? 0);
@@ -289,7 +310,8 @@ async function handleApi(req, res, url, db) {
       db.createPasskey(u.id, result.credentialId, result.publicKey, result.counter);
       return sendJson(res, 200, { ok: true });
     } catch (e) {
-      return sendJson(res, 400, { error: `passkey registration failed: ${e.message}` });
+      console.error("[kcube] passkey registration failed", e);
+      return sendJson(res, 400, { error: "passkey registration failed" });
     }
   }
 
@@ -326,7 +348,8 @@ async function handleApi(req, res, url, db) {
       if (!user) return sendJson(res, 500, { error: 'user not found' });
       return sendJson(res, 200, { token: user.token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
     } catch (e) {
-      return sendJson(res, 400, { error: `passkey login failed: ${e.message}` });
+      console.error("[kcube] passkey login failed", e);
+      return sendJson(res, 400, { error: "passkey login failed" });
     }
   }
 
@@ -375,7 +398,8 @@ async function handleApi(req, res, url, db) {
     try {
       return sendJson(res, 200, db.solvePuzzle(id));
     } catch (e) {
-      return sendJson(res, 404, { error: e.message });
+      if (e.code === "NOT_FOUND") return sendJson(res, 404, { error: e.message });
+      throw e; // an actual solver failure is a 500, not a "not found"
     }
   }
 
@@ -401,7 +425,8 @@ async function handleApi(req, res, url, db) {
         sortOrder: toInt(body.sortOrder) ?? undefined,
       });
     } catch (e) {
-      return sendJson(res, 404, { error: e.message });
+      if (e.code === "NOT_FOUND") return sendJson(res, 404, { error: e.message });
+      throw e;
     }
     return sendJson(res, 200, { ok: true });
   }

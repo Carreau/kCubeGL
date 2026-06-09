@@ -16,7 +16,7 @@ WORKDIR /app
 COPY package.json ./
 COPY src ./src
 COPY server ./server
-COPY index.html play.html ./
+COPY index.html play.html login.html admin.html ./
 
 # SQLite lives on a persistent volume so scores/accounts survive redeploys.
 # Coolify should mount a volume at /data and this is where the DB file goes.
