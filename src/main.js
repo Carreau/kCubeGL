@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { buildCatalog, catalogByName, gravatarUrl, gravatarUrlForHash } from "./shared.mjs";
+import { buildCatalog, catalogByName, gravatarUrl, gravatarUrlForHash, COLORS } from "./shared.mjs";
 import {
   generateLevel, quatToFaces, cellsConnected, OPPOSITE, NEI,
   DIRS as GEN_DIRS, FACE_AXES as GEN_FACE_AXES,
@@ -33,15 +33,7 @@ const SOLVE_STEP_MS = 380; // pause between solution moves
 const SOLVE_CURSOR_MS = 130; // per-cube step as the cursor walks between solution moves
 const CURSOR_HOP_MS = 80;   // smooth slide when the player hops to an adjacent cube
 
-// Six distinct face colours. Index doubles as the "face id".
-const COLORS = [
-  { name: "white", hex: 0xf2f3f5 },
-  { name: "yellow", hex: 0xffd23f },
-  { name: "red", hex: 0xe5484d },
-  { name: "orange", hex: 0xff7a1a },
-  { name: "blue", hex: 0x3aa0ff },
-  { name: "green", hex: 0x3ecf6b },
-];
+// COLORS imported from ./shared.mjs (pure; also used by the server + landing page).
 
 // Fixed mapping from a cube's LOCAL face axis -> colour id, lifted from the
 // shared generation tables (FACE_AXES order = BoxGeometry material order). Every
@@ -331,6 +323,7 @@ const game = {
   par: 0, // bonus-free move budget (reported to the backend as level par)
   optimal: 0, // shortest known solve for this exact board (solution length)
   targetColor: 0,
+  winColor: null, // null = accept any uniform colour; 0-5 = require that specific colour
   state: "menu", // menu | playing | solving | won | lost
   anim: null, // active roll animation
   solution: [], // recorded solving moves: [{cube, key}]
@@ -462,8 +455,8 @@ function buildLevel(config) {
 
 function isUniform() {
   if (game.cubes.length === 0) return false;
-  const t = game.cubes[0].topColor;
-  return game.cubes.every((c) => c.topColor === t);
+  const target = game.winColor ?? game.cubes[0].topColor;
+  return game.cubes.every((c) => c.topColor === target);
 }
 
 // Solved = same colour up on every cube AND a single connected block.
@@ -594,14 +587,19 @@ function afterMove() {
       hasNext ? "Next puzzle" : "Back to puzzles"
     );
     updateHud();
+    syncWinColorPicker();
   } else if (game.moves <= 0) {
     game.state = "lost";
     finalizeAttempt("lost"); // close the attempt as a loss (ran out of moves)
+    const colourHint = game.winColor !== null
+      ? `Get all cubes showing <strong>${COLORS[game.winColor].name}</strong> on top in one connected block.`
+      : "Not quite — every cube the same colour in one connected block.";
     showOverlay(
       "Out of moves",
-      "Not quite — every cube the same colour in one connected block. Press <b>S</b> to see a solution, or retry.",
+      `${colourHint} Press <b>S</b> to see a solution, or retry.`,
       "Retry"
     );
+    syncWinColorPicker();
   }
 }
 
@@ -724,7 +722,36 @@ function updateHud() {
   el.cubes.textContent = game.cubes.length;
   const b = bestFor(game.puzzleName);
   el.best.textContent = b === null ? "–" : b;
+  syncWinColorPicker();
 }
+
+/* --- Colour-target picker ------------------------------------------------- */
+
+function syncWinColorPicker() {
+  const active = game.winColor ?? -1;
+  const locked = game.state === "won" || game.state === "lost";
+  document.querySelectorAll("#win-color-picker .wcp-swatch").forEach((btn) => {
+    btn.classList.toggle("active", Number(btn.dataset.color) === active);
+    btn.disabled = locked;
+  });
+  const dot = document.getElementById("win-target-dot");
+  if (game.winColor !== null) {
+    const hex = COLORS[game.winColor].hex.toString(16).padStart(6, "0");
+    dot.style.background = `#${hex}`;
+    dot.hidden = false;
+  } else {
+    dot.hidden = true;
+  }
+}
+
+document.getElementById("win-color-picker").addEventListener("click", (e) => {
+  const btn = e.target.closest(".wcp-swatch");
+  if (!btn || btn.disabled) return;
+  const v = Number(btn.dataset.color);
+  game.winColor = v === -1 ? null : v;
+  localStorage.setItem("kcube.winColor", game.winColor ?? -1);
+  syncWinColorPicker();
+});
 
 function showOverlay(title, body, btn) {
   el.title.textContent = title;
@@ -843,6 +870,7 @@ async function startLevel(name) {
   game.puzzleConfig = config;
   buildLevel(config);
   game.state = "playing";
+  syncWinColorPicker();
   syncUrl(name);
   beginAttempt(puzzleInfo);
 }
@@ -885,6 +913,7 @@ function retryLevel() {
     updateHud();
   }
   game.state = "playing";
+  syncWinColorPicker();
   beginAttempt();
 }
 
@@ -989,6 +1018,8 @@ async function loadOrder() {
 // with ?puzzle=NAME. Read that name (default: the first puzzle in order), show
 // who's playing, and drop the player onto the board. "Puzzles" / M returns to it.
 async function boot() {
+  const saved = localStorage.getItem("kcube.winColor");
+  game.winColor = saved !== null && saved !== "-1" ? Number(saved) : null;
   refreshIdentity();
   await loadOrder();
   const wanted = new URLSearchParams(location.search).get("puzzle");
