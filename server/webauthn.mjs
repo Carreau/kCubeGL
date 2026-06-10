@@ -10,31 +10,51 @@ import { createHash, createVerify, createPublicKey, randomBytes } from 'node:cry
 // Handles uint (mt=0), negint (mt=1), bstr (mt=2), tstr (mt=3),
 // array (mt=4), map (mt=5) with lengths up to 4 bytes.
 // ---------------------------------------------------------------------------
-function decodeCBOR(buf, pos = 0) {
+const CBOR_MAX_DEPTH = 16;
+
+function decodeCBOR(buf, pos = 0, depth = 0) {
+  // All lengths come from attacker-controlled input: bound every read by the
+  // remaining buffer and cap recursion so a crafted payload can't pin the CPU
+  // or silently decode out-of-bounds reads (undefined) as zeros.
+  if (depth > CBOR_MAX_DEPTH) throw new Error('CBOR: nesting too deep');
+  if (pos >= buf.length) throw new Error('CBOR: unexpected end of input');
   const b = buf[pos++];
   const mt = b >> 5;
   const ai = b & 0x1f;
   let len;
   if (ai < 24) len = ai;
-  else if (ai === 24) len = buf[pos++];
-  else if (ai === 25) { len = (buf[pos] << 8) | buf[pos + 1]; pos += 2; }
-  else if (ai === 26) { len = buf.readUInt32BE(pos); pos += 4; }
-  else throw new Error(`CBOR: unsupported ai=${ai}`);
+  else if (ai === 24) {
+    if (pos + 1 > buf.length) throw new Error('CBOR: truncated length');
+    len = buf[pos++];
+  } else if (ai === 25) {
+    if (pos + 2 > buf.length) throw new Error('CBOR: truncated length');
+    len = buf.readUInt16BE(pos); pos += 2;
+  } else if (ai === 26) {
+    if (pos + 4 > buf.length) throw new Error('CBOR: truncated length');
+    len = buf.readUInt32BE(pos); pos += 4;
+  } else throw new Error(`CBOR: unsupported ai=${ai}`);
 
   if (mt === 0) return { v: len, pos };
   if (mt === 1) return { v: -(len + 1), pos };
-  if (mt === 2) return { v: buf.slice(pos, pos + len), pos: pos + len };
-  if (mt === 3) return { v: buf.slice(pos, pos + len).toString('utf8'), pos: pos + len };
+  if (mt === 2 || mt === 3) {
+    if (pos + len > buf.length) throw new Error('CBOR: length exceeds buffer');
+    const slice = buf.slice(pos, pos + len);
+    return { v: mt === 2 ? slice : slice.toString('utf8'), pos: pos + len };
+  }
   if (mt === 4) {
+    // Each element takes at least one byte, so the count is bounded by what's left.
+    if (pos + len > buf.length) throw new Error('CBOR: length exceeds buffer');
     const arr = [];
-    for (let i = 0; i < len; i++) { const x = decodeCBOR(buf, pos); arr.push(x.v); pos = x.pos; }
+    for (let i = 0; i < len; i++) { const x = decodeCBOR(buf, pos, depth + 1); arr.push(x.v); pos = x.pos; }
     return { v: arr, pos };
   }
   if (mt === 5) {
+    // Each entry takes at least two bytes (key + value).
+    if (pos + 2 * len > buf.length) throw new Error('CBOR: length exceeds buffer');
     const map = new Map();
     for (let i = 0; i < len; i++) {
-      const k = decodeCBOR(buf, pos); pos = k.pos;
-      const v = decodeCBOR(buf, pos); pos = v.pos;
+      const k = decodeCBOR(buf, pos, depth + 1); pos = k.pos;
+      const v = decodeCBOR(buf, pos, depth + 1); pos = v.pos;
       map.set(k.v, v.v);
     }
     return { v: map, pos };

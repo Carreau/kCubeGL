@@ -15,6 +15,7 @@
  * ========================================================================== */
 
 import http from "node:http";
+import { Worker } from "node:worker_threads";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, normalize, extname, sep } from "node:path";
@@ -94,8 +95,13 @@ const adminToken = () => process.env.KCUBE_ADMIN_TOKEN || null;
 const trustProxy = () =>
   process.env.KCUBE_TRUST_PROXY === "1" || process.env.KCUBE_TRUST_PROXY === "true";
 
+// X-Forwarded-* headers can be comma-separated lists (one entry per proxy hop);
+// only the first (client-nearest) entry is meaningful.
+const firstForwarded = (v) => String(v).split(',')[0].trim();
+
 function fwdHost(req) {
-  return (trustProxy() && req.headers['x-forwarded-host']) || req.headers.host || 'localhost';
+  const fwd = trustProxy() && req.headers['x-forwarded-host'];
+  return (fwd && firstForwarded(fwd)) || req.headers.host || 'localhost';
 }
 
 // Validate an optional Gravatar email. Returns null for "no email" (empty/absent),
@@ -110,7 +116,8 @@ const cleanEmail = (v) => {
 };
 
 function getOrigin(req) {
-  const proto = (trustProxy() && req.headers['x-forwarded-proto']) ||
+  const fwdProto = trustProxy() && req.headers['x-forwarded-proto'];
+  const proto = (fwdProto && firstForwarded(fwdProto)) ||
     (req.socket && req.socket.encrypted ? 'https' : 'http');
   return `${proto}://${fwdHost(req)}`;
 }
@@ -125,6 +132,72 @@ function getRpId(req) {
 const LOOPBACK_HOSTS = new Set(['0.0.0.0', '127.0.0.1', '::', '::1', '']);
 function displayHost(host) {
   return LOOPBACK_HOSTS.has(host) ? 'localhost' : host;
+}
+
+/* --- rate limiting ------------------------------------------------------------
+ * Tiny in-memory per-IP sliding window (no deps). Applied to the abuse-prone
+ * auth endpoints: registration, password login and the passkey ceremonies.
+ * Defaults are deliberately generous (they only need to stop hammering, not
+ * shape normal traffic); KCUBE_RATE_LIMIT overrides the per-minute cap for all
+ * buckets (0 disables limiting entirely).
+ * --------------------------------------------------------------------------- */
+
+const RATE_WINDOW_MS = 60_000;
+const rateHits = new Map(); // "bucket:ip" -> [timestamps]
+let rateLastSweep = 0;
+
+const rateMax = (def) => {
+  const v = process.env.KCUBE_RATE_LIMIT;
+  if (v === undefined || v === "") return def;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : def;
+};
+
+function clientIp(req) {
+  if (trustProxy() && req.headers["x-forwarded-for"]) {
+    return firstForwarded(req.headers["x-forwarded-for"]);
+  }
+  return (req.socket && req.socket.remoteAddress) || "unknown";
+}
+
+// True when this hit pushes `bucket` past `max` events per window for this IP.
+function rateLimited(bucket, ip, max) {
+  if (!(max > 0)) return false; // 0/negative = disabled
+  const t = Date.now();
+  if (t - rateLastSweep > RATE_WINDOW_MS) { // keep the map from growing unbounded
+    rateLastSweep = t;
+    for (const [k, arr] of rateHits) {
+      const live = arr.filter((x) => t - x < RATE_WINDOW_MS);
+      if (live.length) rateHits.set(k, live); else rateHits.delete(k);
+    }
+  }
+  const key = bucket + ":" + ip;
+  const hits = (rateHits.get(key) || []).filter((x) => t - x < RATE_WINDOW_MS);
+  if (hits.length >= max) { rateHits.set(key, hits); return true; }
+  hits.push(t);
+  rateHits.set(key, hits);
+  return false;
+}
+
+/* --- solver worker ------------------------------------------------------------
+ * The BFS/beam solvers can pin the CPU for seconds on the hardest boards, so
+ * the admin solve endpoint runs them in a worker thread instead of blocking
+ * the event loop. The worker module is pure (no Three.js, no DOM, no DB).
+ * --------------------------------------------------------------------------- */
+
+const SOLVE_WORKER_URL = new URL("./solve-worker.mjs", import.meta.url);
+
+function runSolverWorker(config) {
+  return new Promise((resolve, reject) => {
+    // execArgv: [] — don't inherit parent CLI flags (e.g. --input-type/--eval
+    // flags from an embedding process), which can break module workers.
+    const w = new Worker(SOLVE_WORKER_URL, { workerData: config, execArgv: [] });
+    let settled = false;
+    const settle = (fn, v) => { if (!settled) { settled = true; fn(v); } };
+    w.once("message", (r) => settle(resolve, r));
+    w.once("error", (e) => settle(reject, e));
+    w.once("exit", (code) => settle(reject, new Error(`solver worker exited with code ${code}`)));
+  });
 }
 
 /* --- static files ----------------------------------------------------------- */
@@ -169,6 +242,14 @@ async function handleApi(req, res, url, db) {
     if (!u.isAdmin) { sendJson(res, 403, { error: 'admin required' }); return null; }
     return u;
   };
+  // Per-IP rate limit for abuse-prone endpoints; true ⇒ a 429 was already sent.
+  const limited = (bucket, max) => {
+    if (rateLimited(bucket, clientIp(req), rateMax(max))) {
+      sendJson(res, 429, { error: "too many requests — slow down" });
+      return true;
+    }
+    return false;
+  };
 
   // GET /api/health
   if (method === "GET" && parts[1] === "health" && parts.length === 2) {
@@ -181,6 +262,7 @@ async function handleApi(req, res, url, db) {
   // only to derive a Gravatar hash and is never stored. An optional password is
   // hashed with scrypt before storage — username-only accounts remain valid.
   if (method === "POST" && parts[1] === "users" && parts.length === 2) {
+    if (limited("users", 30)) return;
     const body = await readJson(req);
     const username = typeof body.username === "string" ? body.username.trim() : "";
     if (username.length < 1 || username.length > 24) {
@@ -261,7 +343,11 @@ async function handleApi(req, res, url, db) {
     if (!name) return sendJson(res, 400, { error: "bad puzzle" });
     const puzzle = db.puzzleByName(name);
     if (!puzzle) return sendJson(res, 404, { error: "no such puzzle" });
-    db.recordOptimal(puzzle.id, toInt(body.optimal) ?? undefined);
+    // `optimal` is client-supplied: accept only a plausible value (a positive
+    // integer no greater than the puzzle's par) so nobody can poison the
+    // shortest-known-solve with 1 or a negative number. Ignore the rest.
+    const opt = toInt(body.optimal);
+    if (opt != null && opt >= 1 && opt <= puzzle.par) db.recordOptimal(puzzle.id, opt);
     return sendJson(res, 201, { attemptId: db.startAttempt(u.id, puzzle.id) });
   }
 
@@ -284,6 +370,25 @@ async function handleApi(req, res, url, db) {
     const moveSeq = typeof body.moveSeq === "string"
       ? body.moveSeq.replace(/[^RLUD]/g, "").slice(0, 4096) || null
       : null;
+    // Win submissions feed best-scores and the world record, so sanity-check
+    // them. (A full server-side replay of moveSeq isn't possible: the client
+    // may omit it, and the recorded path mixes free cursor switches with paid
+    // rolls — so we enforce the sound bounds we do have.)
+    if (body.outcome === "won") {
+      const mu = toInt(body.movesUsed);
+      // A win always costs at least one roll.
+      if (mu == null || mu < 1) return sendJson(res, 400, { error: "bad movesUsed for a win" });
+      // The recorded cursor path contains one code per roll (plus free cursor
+      // switches), so when present it can never be shorter than movesUsed.
+      if (moveSeq && moveSeq.length < mu) {
+        return sendJson(res, 400, { error: "move sequence inconsistent with movesUsed" });
+      }
+      // No legitimate win can beat the BFS-proven optimal (when it's known).
+      const pz = db.puzzleById(puzzleId);
+      if (pz && pz.full_optimal != null && mu < pz.full_optimal) {
+        return sendJson(res, 400, { error: "movesUsed below the proven optimal" });
+      }
+    }
     const prevBest = db.userBest(u.id, puzzleId); // before recording this outcome
     db.finishAttempt(id, u.id, { outcome: body.outcome, movesUsed, durationMs, moveSeq });
     return sendJson(res, 200, {
@@ -310,9 +415,10 @@ async function handleApi(req, res, url, db) {
 
   // POST /api/auth/passkey/register/options  (requires auth)
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'register' && parts[4] === 'options') {
+    if (limited("passkey", 30)) return;
     const u = requireUser(); if (!u) return;
     const challenge = generateChallenge();
-    db.saveChallenge(challenge, u.id);
+    db.saveChallenge(challenge, u.id, 'register');
     const rpId = getRpId(req);
     const userIdBuf = Buffer.alloc(8);
     userIdBuf.writeBigInt64BE(BigInt(u.id));
@@ -329,6 +435,7 @@ async function handleApi(req, res, url, db) {
 
   // POST /api/auth/passkey/register/verify  (requires auth)
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'register' && parts[4] === 'verify') {
+    if (limited("passkey", 30)) return;
     const u = requireUser(); if (!u) return;
     const body = await readJson(req);
     if (!body.credential?.response) return sendJson(res, 400, { error: 'missing credential' });
@@ -336,7 +443,7 @@ async function handleApi(req, res, url, db) {
     try {
       clientData = JSON.parse(Buffer.from(body.credential.response.clientDataJSON, 'base64url').toString('utf8'));
     } catch { return sendJson(res, 400, { error: 'invalid clientDataJSON' }); }
-    const challengeRow = db.consumeChallenge(clientData.challenge);
+    const challengeRow = db.consumeChallenge(clientData.challenge, 'register');
     if (!challengeRow) return sendJson(res, 400, { error: 'invalid or expired challenge' });
     if (challengeRow.user_id !== u.id) return sendJson(res, 400, { error: 'challenge user mismatch' });
     try {
@@ -351,8 +458,9 @@ async function handleApi(req, res, url, db) {
 
   // POST /api/auth/passkey/login/options
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'login' && parts[4] === 'options') {
+    if (limited("passkey", 30)) return;
     const challenge = generateChallenge();
-    db.saveChallenge(challenge, null);
+    db.saveChallenge(challenge, null, 'login');
     return sendJson(res, 200, {
       challenge,
       timeout: 60000,
@@ -364,13 +472,14 @@ async function handleApi(req, res, url, db) {
 
   // POST /api/auth/passkey/login/verify
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'login' && parts[4] === 'verify') {
+    if (limited("passkey", 30)) return;
     const body = await readJson(req);
     if (!body.assertion?.response) return sendJson(res, 400, { error: 'missing assertion' });
     let clientData;
     try {
       clientData = JSON.parse(Buffer.from(body.assertion.response.clientDataJSON, 'base64url').toString('utf8'));
     } catch { return sendJson(res, 400, { error: 'invalid clientDataJSON' }); }
-    const challengeRow = db.consumeChallenge(clientData.challenge);
+    const challengeRow = db.consumeChallenge(clientData.challenge, 'login');
     if (!challengeRow) return sendJson(res, 400, { error: 'invalid or expired challenge' });
     const credentialId = body.assertion.id || body.assertion.rawId;
     const passkey = db.getPasskeyById(credentialId);
@@ -389,6 +498,7 @@ async function handleApi(req, res, url, db) {
 
   // POST /api/auth/password/login  { username, password }
   if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'password' && parts[3] === 'login') {
+    if (limited("login", 30)) return;
     const body = await readJson(req);
     const username = typeof body.username === 'string' ? body.username.trim() : '';
     const password = typeof body.password === 'string' ? body.password : '';
@@ -413,6 +523,8 @@ async function handleApi(req, res, url, db) {
     const targetId = toInt(parts[3]);
     if (!targetId) return sendJson(res, 400, { error: 'bad user id' });
     const body = await readJson(req);
+    // Require a real boolean: a truthy string like "false" must not grant admin.
+    if (typeof body.isAdmin !== 'boolean') return sendJson(res, 400, { error: 'isAdmin must be a boolean' });
     if (targetId === u.id && body.isAdmin === false) {
       return sendJson(res, 400, { error: "can't remove your own admin status" });
     }
@@ -461,11 +573,15 @@ async function handleApi(req, res, url, db) {
     const u = requireAdmin(); if (!u) return;
     const id = toInt(parts[3]);
     if (!id) return sendJson(res, 400, { error: 'bad puzzle id' });
+    const row = db.puzzleById(id);
+    if (!row) return sendJson(res, 404, { error: `puzzle ${id} not found` });
     try {
-      return sendJson(res, 200, db.solvePuzzle(id));
+      // Run the CPU-heavy solvers off the event loop, then persist the result.
+      const r = await runSolverWorker({ seed: row.seed, numCubes: row.num_cubes, scramble: row.scramble });
+      return sendJson(res, 200, db.saveSolveResult(id, r));
     } catch (e) {
-      if (e.code === "NOT_FOUND") return sendJson(res, 404, { error: e.message });
-      throw e; // an actual solver failure is a 500, not a "not found"
+      console.error('[kcube] solver worker failed', e && e.stack ? e.stack : e);
+      return sendJson(res, 500, { error: 'solver failed' });
     }
   }
 
@@ -505,27 +621,43 @@ async function handleApi(req, res, url, db) {
 export function startServer({ dbPath, port = 8080, host = "127.0.0.1" } = {}) {
   const db = openDb(dbPath);
   const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host || host}`);
     try {
+      // Inside the try: a malformed Host header (e.g. "a b") makes new URL()
+      // throw, which must be a 400 — not an unhandled rejection that kills the
+      // process. Likewise a bad %-escape in the path (URIError) is the
+      // client's fault, not a 500.
+      const url = new URL(req.url, `http://${req.headers.host || host}`);
       if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
         await handleApi(req, res, url, db);
       } else {
         await serveStatic(req, res, decodeURIComponent(url.pathname));
       }
     } catch (e) {
-      if (!res.headersSent) sendJson(res, 500, { error: "server error" });
-      console.error("[kcube]", e && e.stack ? e.stack : e);
+      const badRequest = e instanceof URIError || (e && e.code === "ERR_INVALID_URL");
+      if (!res.headersSent) {
+        sendJson(res, badRequest ? 400 : 500, { error: badRequest ? "bad request" : "server error" });
+      }
+      if (!badRequest) console.error("[kcube]", e && e.stack ? e.stack : e);
     }
   });
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const onListenError = (e) => { db.close(); reject(e); };
+    server.once("error", onListenError);
     server.listen(port, host, () => {
+      server.removeListener("error", onListenError); // listen succeeded
       const addr = server.address();
       // Prefer "localhost" in the URL when bound to a wildcard/loopback
       // address. Browsers treat localhost as a secure context AND accept it as
       // a WebAuthn RP ID, whereas a bare IP (0.0.0.0 / 127.0.0.1) is rejected
       // as an RP ID — which would make passkey registration fail.
       const url = `http://${displayHost(host)}:${addr.port}/`;
-      resolve({ server, db, url, port: addr.port, close: () => { server.close(); db.close(); } });
+      const close = () => {
+        // Drop keep-alive connections so close() actually completes, and only
+        // close the DB once the server has fully shut down.
+        server.closeAllConnections();
+        server.close(() => db.close());
+      };
+      resolve({ server, db, url, port: addr.port, close });
     });
   });
 }
