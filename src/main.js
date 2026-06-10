@@ -299,7 +299,11 @@ const boardGroup = new THREE.Group();
 scene.add(boardGroup);
 
 const baseGeo = new THREE.BoxGeometry(BOARD * S + 0.5, 0.4, BOARD * S + 0.5);
-const baseMat = new THREE.MeshStandardMaterial({ color: SCENE_THEME[initTheme()].base, roughness: 0.9 });
+const baseMat = new THREE.MeshStandardMaterial({
+  color: SCENE_THEME[initTheme()].base,
+  roughness: Math.max(0.25, 0.9 - design.metalness * 0.6),
+  metalness: design.metalness * 0.4,
+});
 const base = new THREE.Mesh(baseGeo, baseMat);
 base.position.y = -0.2 - 0.001;
 base.receiveShadow = true;
@@ -315,7 +319,8 @@ const tileMats = []; // [{ mat, dark }] — `dark` marks the checker parity so a
       const dark = (r + c) % 2 === 1;
       const mat = new THREE.MeshStandardMaterial({
         color: dark ? t.tileB : t.tileA,
-        roughness: 0.85,
+        roughness: Math.max(0.2, 0.85 - design.metalness * 0.55),
+        metalness: design.metalness * 0.4,
       });
       const tile = new THREE.Mesh(tileGeo, mat);
       tile.position.set(cellX(c), -0.06, cellZ(r));
@@ -1179,6 +1184,15 @@ function applyMetalness(v) {
     m.roughness = Math.max(0.1, 0.55 - v * 0.45);
     m.needsUpdate = true;
   });
+  // Board surfaces are inherently matte; scale down more gently than the cubes.
+  baseMat.metalness = v * 0.4;
+  baseMat.roughness = Math.max(0.25, 0.9 - v * 0.6);
+  baseMat.needsUpdate = true;
+  for (const { mat } of tileMats) {
+    mat.metalness = v * 0.4;
+    mat.roughness = Math.max(0.2, 0.85 - v * 0.55);
+    mat.needsUpdate = true;
+  }
 }
 
 function applyBevel(v) {
