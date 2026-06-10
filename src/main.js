@@ -2,10 +2,10 @@ import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import {
   buildCatalog, catalogByName, gravatarUrl, gravatarUrlForHash, COLORS,
-  BOARD, NEI, OPPOSITE, inBounds,
+  BOARD, NEI, OPPOSITE, inBounds, cubeAt, cellsConnected,
 } from "./shared.mjs";
 import {
-  generateLevel, quatToFaces, cellsConnected,
+  generateLevel, quatToFaces,
   DIRS as GEN_DIRS, FACE_AXES as GEN_FACE_AXES,
 } from "./level-gen.mjs";
 import * as api from "./api.mjs";
@@ -70,8 +70,15 @@ const ARROW_CW = ["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"];
 function remapArrowKey(key) {
   const idx = ARROW_CW.indexOf(key);
   if (idx === -1) return key;
-  const rot = (Math.round(camYawTarget / (Math.PI / 2)) % 4 + 4) % 4;
+  const rot = (camQuarterTurns() % 4 + 4) % 4;
   return ARROW_CW[(idx + 4 - rot) % 4];
+}
+
+// How many quarter-turns the camera is heading toward (from camYawTarget, so it
+// snaps the moment Q/E is pressed). Shared by the arrow-key remap above and the
+// cursor-tip orientation in the render loop, which must agree on the same grid.
+function camQuarterTurns() {
+  return Math.round(camYawTarget / (Math.PI / 2));
 }
 
 /* --- Helpers ---------------------------------------------------------------- */
@@ -80,6 +87,9 @@ function remapArrowKey(key) {
 // the server uses too); this file just renders what it produces. No PRNG here.
 const cellX = (col) => (col - (BOARD - 1) / 2) * S;
 const cellZ = (row) => (row - (BOARD - 1) / 2) * S;
+
+// Ease-in-out (smooth start and stop) for roll and cursor-walk animations.
+const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 
 // Build a canvas texture: a coloured rounded square on a dark background, so
 // faces read clearly and adjacent cubes still show a seam between them.
@@ -294,21 +304,21 @@ scene.add(cursor);
 const cubeGeo = bevelledCubeGeometry(S, 0.08, 3);
 
 class Cube {
-  constructor(row, col) {
+  constructor(r, c) {
     this.mesh = new THREE.Mesh(cubeGeo, FACE_MATERIALS);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
     scene.add(this.mesh);
-    this.setCell(row, col);
+    this.setCell(r, c);
     this.mesh.quaternion.identity(); // solved
     this.syncMesh();
   }
-  setCell(row, col) {
-    this.row = row;
-    this.col = col;
+  setCell(r, c) {
+    this.r = r;
+    this.c = c;
   }
   syncMesh() {
-    this.mesh.position.set(cellX(this.col), HALF, cellZ(this.row));
+    this.mesh.position.set(cellX(this.c), HALF, cellZ(this.r));
   }
   get topColor() {
     return topColor(this.mesh.quaternion);
@@ -371,14 +381,10 @@ const el = {
   infoCloseBtn: document.getElementById("infoCloseBtn"),
 };
 
-function cubeAt(row, col) {
-  return game.cubes.find((c) => c.row === row && c.col === col) || null;
-}
-
 // Are the current cubes a single 4-connected (N/S/E/W) block? (cellsConnected
-// lives in level-gen.mjs, the shared source of truth.)
+// lives in shared.mjs, the shared source of truth.)
 function isContiguous() {
-  return cellsConnected(game.cubes.map((c) => [c.row, c.col]));
+  return cellsConnected(game.cubes.map((c) => [c.r, c.c]));
 }
 
 /* --- Level generation ------------------------------------------------------
@@ -402,7 +408,7 @@ function cursorPath(from, to) {
     const c = queue[i];
     if (c === to) break;
     for (const [dr, dc] of NEI) {
-      const n = cubeAt(c.row + dr, c.col + dc);
+      const n = cubeAt(game.cubes, c.r + dr, c.c + dc);
       if (n && !seen.has(n)) { seen.add(n); prev.set(n, c); queue.push(n); }
     }
   }
@@ -424,7 +430,7 @@ function buildLevel(config) {
   // generator produced (lifted from a plain [x,y,z,w] array into THREE here).
   for (const c of game.cubes) c.dispose();
   game.cubes = gen.cubes.map((g) => {
-    const cube = new Cube(g.row, g.col);
+    const cube = new Cube(g.r, g.c);
     cube.mesh.quaternion.fromArray(g.quat);
     return cube;
   });
@@ -436,8 +442,8 @@ function buildLevel(config) {
     .map(({ cubeIndex, key }) => ({ cube: game.cubes[cubeIndex], key: OPPOSITE[key] }));
 
   // Snapshot the scrambled start so "show solution" / Retry can replay from here.
-  game.initial = game.cubes.map((c) => ({
-    cube: c, row: c.row, col: c.col, quat: c.mesh.quaternion.clone(),
+  game.initial = game.cubes.map((k) => ({
+    cube: k, r: k.r, c: k.c, quat: k.mesh.quaternion.clone(),
   }));
 
   // Move budget. `par` is the bonus-free budget (the level's par, reported to the
@@ -484,7 +490,7 @@ function selectCube(idx) {
   // Slide from the cursor's current visual position to the new cube.
   game.walk = {
     pts: [{ x: cursor.position.x, z: cursor.position.z },
-          { x: cellX(cube.col), z: cellZ(cube.row) }],
+          { x: cellX(cube.c), z: cellZ(cube.r) }],
     seg: 0, t: 0, onDone: null, ms: CURSOR_HOP_MS,
   };
 }
@@ -494,10 +500,10 @@ function tryMove(key) {
   const dir = DIRS[key];
   if (!dir) return;
   const cube = game.cubes[game.selected];
-  const nr = cube.row + dir.dr, nc = cube.col + dir.dc;
+  const nr = cube.r + dir.dr, nc = cube.c + dir.dc;
   if (!inBounds(nr, nc)) return; // edge: nothing happens
 
-  const other = cubeAt(nr, nc);
+  const other = cubeAt(game.cubes, nr, nc);
   if (other) {
     // re-select neighbour — free, no move spent. Still a cursor move, so record it
     // (the recorded R/L/U/D stream replays the player's full path, not just rolls).
@@ -532,8 +538,7 @@ function startRoll(cube, dir, nr, nc, cost) {
 function stepRoll(dt) {
   const a = game.anim;
   a.t = Math.min(1, a.t + dt / (game.solving ? SOLVE_ROLL_MS : ROLL_MS));
-  // ease-in-out for a satisfying tip
-  const e = a.t < 0.5 ? 2 * a.t * a.t : 1 - Math.pow(-2 * a.t + 2, 2) / 2;
+  const e = easeInOut(a.t); // for a satisfying tip
   const angle = a.dir.angle * e;
   const q = new THREE.Quaternion().setFromAxisAngle(a.dir.axis, angle);
   a.cube.mesh.position.copy(a.startPos).applyQuaternion(q).add(a.pivot);
@@ -558,7 +563,7 @@ function stepRoll(dt) {
 // between each adjacent pair, then run `onDone` (the actual roll). This replaces
 // the old teleport when consecutive solution moves sit on different cubes.
 function startCursorWalk(path, onDone) {
-  const pts = path.map((c) => ({ x: cellX(c.col), z: cellZ(c.row) }));
+  const pts = path.map((c) => ({ x: cellX(c.c), z: cellZ(c.r) }));
   game.walk = { pts, seg: 0, t: 0, onDone };
 }
 
@@ -570,7 +575,7 @@ function stepWalk(dt) {
   const onLast = w.seg >= w.pts.length - 2;
   const s = onLast ? Math.min(w.t, 1) : w.t;
   const a = w.pts[w.seg], b = w.pts[w.seg + 1];
-  const e = s < 0.5 ? 2 * s * s : 1 - Math.pow(-2 * s + 2, 2) / 2; // ease per step
+  const e = easeInOut(s); // ease per step
   cursor.position.x = a.x + (b.x - a.x) * e;
   cursor.position.z = a.z + (b.z - a.z) * e;
   if (onLast && w.t >= 1) {
@@ -625,8 +630,8 @@ function extractInitialSolverState() {
   return {
     cubes: game.initial.map((snap, i) => ({
       id: i,
-      r: snap.row,
-      c: snap.col,
+      r: snap.r,
+      c: snap.c,
       faces: quatToFaces(snap.quat.toArray()),
     })),
     cursorId,
@@ -665,7 +670,7 @@ function tryImproveWithSolver() {
 
 function restoreInitial() {
   for (const s of game.initial) {
-    s.cube.setCell(s.row, s.col);
+    s.cube.setCell(s.r, s.c);
     s.cube.mesh.quaternion.copy(s.quat);
     s.cube.syncMesh();
   }
@@ -714,7 +719,7 @@ function solutionStep() {
     game.selected = game.cubes.indexOf(cube);
     updateCursor(true);
     const dir = DIRS[key];
-    startRoll(cube, dir, cube.row + dir.dr, cube.col + dir.dc, false);
+    startRoll(cube, dir, cube.r + dir.dr, cube.c + dir.dc, false);
   };
   const path = cursorPath(from, cube);
   if (path && path.length > 1) startCursorWalk(path, roll);
@@ -1042,7 +1047,7 @@ function loop(now) {
   // cursor bobs; tip snaps to the same 90° grid as the arrow-key remapping so it
   // always points toward where ArrowUp actually sends the cube.
   cursor.position.y = S + 0.55 + Math.sin(now * 0.004) * 0.07;
-  cursor.rotation.y = Math.round(camYawTarget / (Math.PI / 2)) * (Math.PI / 2);
+  cursor.rotation.y = camQuarterTurns() * (Math.PI / 2);
 
   renderer.render(scene, camera);
   requestAnimationFrame(loop);

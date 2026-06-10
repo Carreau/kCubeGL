@@ -1,3 +1,5 @@
+// NOTE: must stay in sync with the pre-paint script src/theme-init.js,
+// which reads the same localStorage key before first render.
 const KEY = 'kcube.theme';
 
 function preferred() {

@@ -1,20 +1,14 @@
 import * as api from './api.mjs';
 import { setupTheme } from './theme.mjs';
-import { $, esc, dash, pct, fmtDate } from './ui.mjs';
+import { $, esc, dash, pct, fmtDate, renderAccountWidget } from './ui.mjs';
 
 let currentUser = null;
 
 function renderAccount() {
-  const box = $('account');
-  if (!currentUser) {
-    box.innerHTML = `<a href="login.html" class="primary" style="text-decoration:none;font-size:13px;padding:8px 18px">Sign In</a>`;
-    return;
-  }
-  box.innerHTML =
-    `<span class="who-pill">@${esc(currentUser.username)}</span>` +
-    `<a href="index.html" class="link-btn" style="text-decoration:none">Levels</a>` +
-    `<button id="signout" class="link-btn" type="button">Sign out</button>`;
-  $('signout').addEventListener('click', () => { api.clearToken(); location.href = 'login.html'; });
+  renderAccountWidget($('account'), currentUser, {
+    levelsLink: true,
+    onSignOut: () => { api.clearToken(); location.href = 'login.html'; },
+  });
 }
 
 async function loadUsers() {

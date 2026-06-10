@@ -14,8 +14,8 @@
  *
  * Same conventions as test/api.mjs: ok/eq helpers, exit non-zero on failure.
  */
-import { buildCatalog, CATALOG_SIZE, OPPOSITE, budgetFor } from "../src/shared.mjs";
-import { generateLevel, quatToFaces, qMul, qAxisAngle, DIRS, cellsConnected } from "../src/level-gen.mjs";
+import { buildCatalog, CATALOG_SIZE, OPPOSITE, budgetFor, cellsConnected } from "../src/shared.mjs";
+import { generateLevel, quatToFaces, qMul, qAxisAngle, DIRS } from "../src/level-gen.mjs";
 import { bfsSolve, beamSolve } from "../src/solver.mjs";
 import { buildCatalogState } from "../src/catalog-solve.mjs";
 
@@ -62,13 +62,13 @@ try {
 
   /* --- helpers shared by 2–4 ----------------------------------------------- */
 
-  // Replay one roll on a generated cube ({row, col, quat}) — exactly what the
+  // Replay one roll on a generated cube ({r, c, quat}) — exactly what the
   // game does: premultiply the tip-over quaternion and step one cell.
   function rollGenCube(cube, key) {
     const d = DIRS[key];
     return {
-      row: cube.row + d.dr,
-      col: cube.col + d.dc,
+      r: cube.r + d.dr,
+      c: cube.c + d.dc,
       quat: qMul(qAxisAngle(d.axis, d.angle), cube.quat),
     };
   }
@@ -76,7 +76,7 @@ try {
   const topOf = (cube) => quatToFaces(cube.quat)[2];
   const isUniformConnected = (cubes) =>
     cubes.every((c) => topOf(c) === topOf(cubes[0])) &&
-    cellsConnected(cubes.map((c) => [c.row, c.col]));
+    cellsConnected(cubes.map((c) => [c.r, c.c]));
 
   /* --- 2. Solvability of every catalogue puzzle ---------------------------- */
 
@@ -91,10 +91,10 @@ try {
     const solution = gen.scramble.slice().reverse()
       .map((m) => ({ cubeIndex: m.cubeIndex, key: OPPOSITE[m.key] }));
     let legal = true;
-    const occupied = (r, c, skip) => cubes.some((k, i) => i !== skip && k.row === r && k.col === c);
+    const occupied = (r, c, skip) => cubes.some((k, i) => i !== skip && k.r === r && k.c === c);
     for (const m of solution) {
       const next = rollGenCube(cubes[m.cubeIndex], m.key);
-      if (occupied(next.row, next.col, m.cubeIndex)) { legal = false; break; }
+      if (occupied(next.r, next.c, m.cubeIndex)) { legal = false; break; }
       cubes[m.cubeIndex] = next;
     }
     ok(legal, `${p.name}: replaying the stored solution never rolls into an occupied cell`);
@@ -125,7 +125,7 @@ try {
     let valid = true;
     for (const mv of bfs) {
       const next = rollGenCube(byId(mv.id), mv.dir);
-      if (cubes.some((k, i) => i !== mv.id && k.row === next.row && k.col === next.col)) { valid = false; break; }
+      if (cubes.some((k, i) => i !== mv.id && k.r === next.r && k.c === next.c)) { valid = false; break; }
       cubes[mv.id] = next;
     }
     ok(valid, `${p.name}: BFS solution is legal on the real board`);

@@ -15,6 +15,7 @@
  * ========================================================================== */
 
 import http from "node:http";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -90,6 +91,16 @@ const VALID_OUTCOME = new Set(["won", "lost", "abandoned"]);
 // Unset (the default) means no new admins can be minted via the API. Read at
 // use-time (not cached) so tests can set it before the first request.
 const adminToken = () => process.env.KCUBE_ADMIN_TOKEN || null;
+
+// Constant-time string comparison for secrets. Hashing both sides first makes
+// the buffers equal-length (timingSafeEqual requires that), so neither the
+// length nor the content of the attacker's guess leaks through timing.
+function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
 // Only trust X-Forwarded-* when we're knowingly behind a proxy. Otherwise a
 // client could spoof those headers to steer the WebAuthn origin/RP-ID.
 const trustProxy = () =>
@@ -224,121 +235,133 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
-/* --- API -------------------------------------------------------------------- */
+/* --- API routing -------------------------------------------------------------
+ * Declarative route table instead of a wall of if-chains. Each entry says what
+ * it needs and the dispatcher provides it centrally:
+ *   method / path — path is exact segments plus ":param" placeholders.
+ *   auth          — null (open), 'user' (401 without a token) or 'admin'
+ *                   (401 without a token, then 403 for non-admins).
+ *   body          — true ⇒ the JSON body is parsed before the handler runs.
+ *   limit         — { bucket, max } ⇒ per-IP rate limit (429), checked first
+ *                   (before auth, so unauthenticated hammering is also capped).
+ * Handlers get ctx = { req, res, db, params, body, user } — `user` is resolved
+ * from the bearer token for every route, so auth-optional handlers can use it.
+ * --------------------------------------------------------------------------- */
+
+// Match one route pattern against the request path segments, extracting :params.
+// Strict segment count: no prefix matching, so unknown paths fall through to 404.
+function matchPath(patSegs, segs) {
+  if (patSegs.length !== segs.length) return null;
+  const params = {};
+  for (let i = 0; i < patSegs.length; i++) {
+    if (patSegs[i].startsWith(":")) params[patSegs[i].slice(1)] = segs[i];
+    else if (patSegs[i] !== segs[i]) return null;
+  }
+  return params;
+}
 
 async function handleApi(req, res, url, db) {
-  const { pathname, searchParams } = url;
-  const method = req.method;
-  const parts = pathname.split("/").filter(Boolean); // ["api", ...]
-  const user = () => db.userByToken(bearer(req));
-  const requireUser = () => {
-    const u = user();
-    if (!u) { sendJson(res, 401, { error: "sign in first" }); return null; }
-    return u;
-  };
-  const requireAdmin = () => {
-    const u = requireUser();
-    if (!u) return null;
-    if (!u.isAdmin) { sendJson(res, 403, { error: 'admin required' }); return null; }
-    return u;
-  };
-  // Per-IP rate limit for abuse-prone endpoints; true ⇒ a 429 was already sent.
-  const limited = (bucket, max) => {
-    if (rateLimited(bucket, clientIp(req), rateMax(max))) {
-      sendJson(res, 429, { error: "too many requests — slow down" });
-      return true;
-    }
-    return false;
-  };
-
-  // GET /api/health
-  if (method === "GET" && parts[1] === "health" && parts.length === 2) {
-    return sendJson(res, 200, { ok: true });
+  const segs = url.pathname.split("/").filter(Boolean); // ["api", ...]
+  let params = null, route = null;
+  for (const r of ROUTES) {
+    if (r.method !== req.method) continue;
+    params = matchPath(r.segs, segs);
+    if (params) { route = r; break; }
   }
+  if (!route) return sendJson(res, 404, { error: "not found" });
+  if (route.limit && rateLimited(route.limit.bucket, clientIp(req), rateMax(route.limit.max))) {
+    return sendJson(res, 429, { error: "too many requests — slow down" });
+  }
+  const user = db.userByToken(bearer(req));
+  if (route.auth && !user) return sendJson(res, 401, { error: "sign in first" });
+  if (route.auth === "admin" && !user.isAdmin) return sendJson(res, 403, { error: "admin required" });
+  const body = route.body ? await readJson(req) : null;
+  return route.handler({ req, res, db, params, body, user });
+}
+
+/* --- API handlers ------------------------------------------------------------- */
+
+const ROUTES = [
+  // GET /api/health
+  { method: "GET", path: "/api/health", handler({ res }) {
+    return sendJson(res, 200, { ok: true });
+  } },
 
   // POST /api/users  { username, adminToken?, email?, password? }
   // Anyone can register a username. Admin is granted only when the request
   // carries the bootstrap secret KCUBE_ADMIN_TOKEN. An optional email is used
   // only to derive a Gravatar hash and is never stored. An optional password is
   // hashed with scrypt before storage — username-only accounts remain valid.
-  if (method === "POST" && parts[1] === "users" && parts.length === 2) {
-    if (limited("users", 30)) return;
-    const body = await readJson(req);
-    const username = typeof body.username === "string" ? body.username.trim() : "";
-    if (username.length < 1 || username.length > 24) {
-      return sendJson(res, 400, { error: "name must be 1–24 characters" });
-    }
-    const email = cleanEmail(body.email);
-    if (email === undefined) return sendJson(res, 400, { error: "invalid email" });
-    const password = typeof body.password === "string" ? body.password : null;
-    if (password !== null && (password.length < 8 || password.length > 128)) {
-      return sendJson(res, 400, { error: "password must be 8–128 characters" });
-    }
-    const secret = adminToken();
-    const admin = !!secret && body.adminToken === secret;
-    const passwordHash = password ? await hashPassword(password) : null;
-    try {
-      return sendJson(res, 201, db.createUser(username, { admin, email, passwordHash }));
-    } catch (e) {
-      if (e.code === "DUP") return sendJson(res, 409, { error: "name taken" });
-      throw e;
-    }
-  }
+  { method: "POST", path: "/api/users", body: true, limit: { bucket: "users", max: 30 },
+    async handler({ res, db, body }) {
+      const username = typeof body.username === "string" ? body.username.trim() : "";
+      if (username.length < 1 || username.length > 24) {
+        return sendJson(res, 400, { error: "name must be 1–24 characters" });
+      }
+      const email = cleanEmail(body.email);
+      if (email === undefined) return sendJson(res, 400, { error: "invalid email" });
+      const password = typeof body.password === "string" ? body.password : null;
+      if (password !== null && (password.length < 8 || password.length > 128)) {
+        return sendJson(res, 400, { error: "password must be 8–128 characters" });
+      }
+      const secret = adminToken();
+      // Constant-time compare: the bootstrap secret must not leak through timing.
+      const admin = !!secret && safeEqual(body.adminToken, secret);
+      const passwordHash = password ? await hashPassword(password) : null;
+      try {
+        return sendJson(res, 201, db.createUser(username, { admin, email, passwordHash }));
+      } catch (e) {
+        if (e.code === "DUP") return sendJson(res, 409, { error: "name taken" });
+        throw e;
+      }
+    } },
 
   // GET /api/me
-  if (method === "GET" && parts[1] === "me" && parts.length === 2) {
-    const u = requireUser(); if (!u) return;
-    return sendJson(res, 200, u);
-  }
+  { method: "GET", path: "/api/me", auth: "user", handler({ res, user }) {
+    return sendJson(res, 200, user);
+  } },
 
   // PATCH /api/me  { email }  — set/update/clear the Gravatar email.
-  if (method === "PATCH" && parts[1] === "me" && parts.length === 2) {
-    const u = requireUser(); if (!u) return;
-    const body = await readJson(req);
+  { method: "PATCH", path: "/api/me", auth: "user", body: true, handler({ res, db, body, user }) {
     const email = cleanEmail(body.email);
     if (email === undefined) return sendJson(res, 400, { error: "invalid email" });
-    return sendJson(res, 200, { ...u, ...db.setUserEmail(u.id, email) });
-  }
+    return sendJson(res, 200, { ...user, ...db.setUserEmail(user.id, email) });
+  } },
 
   // GET /api/me/stats
-  if (method === "GET" && parts[1] === "me" && parts[2] === "stats") {
-    const u = requireUser(); if (!u) return;
-    return sendJson(res, 200, db.userStats(u.id));
-  }
+  { method: "GET", path: "/api/me/stats", auth: "user", handler({ res, db, user }) {
+    return sendJson(res, 200, db.userStats(user.id));
+  } },
 
   // GET /api/puzzles   (auth optional — adds yourBest). The whole catalogue.
-  if (method === "GET" && parts[1] === "puzzles" && parts.length === 2) {
-    const u = user();
-    return sendJson(res, 200, db.listPuzzles(u ? u.id : null));
-  }
+  { method: "GET", path: "/api/puzzles", handler({ res, db, user }) {
+    return sendJson(res, 200, db.listPuzzles(user ? user.id : null));
+  } },
 
   // GET /api/puzzles/:name   (auth optional)
-  if (method === "GET" && parts[1] === "puzzles" && parts.length === 3) {
-    const name = cleanName(parts[2]);
+  { method: "GET", path: "/api/puzzles/:name", handler({ res, db, params, user }) {
+    const name = cleanName(params.name);
     if (!name) return sendJson(res, 400, { error: "bad puzzle" });
     const meta = db.puzzleMeta(name);
     if (!meta) return sendJson(res, 404, { error: "no such puzzle" });
-    const u = user();
     return sendJson(res, 200, {
       ...meta,
       worldBest: db.worldBest(meta.id),
-      yourBest: u ? db.userBest(u.id, meta.id) : null,
+      yourBest: user ? db.userBest(user.id, meta.id) : null,
       leaderboard: db.leaderboard(meta.id, 10).map((r) => ({
         username: r.username,
         avatarHash: r.avatarHash ?? null,
         best: r.best,
         durationMs: r.durationMs,
         attempts: r.attempts,
-        you: u ? r.user_id === u.id : false,
+        you: user ? r.user_id === user.id : false,
       })),
       stats: db.puzzleStats(meta.id),
     });
-  }
+  } },
 
   // POST /api/attempts  { puzzle, optimal }
-  if (method === "POST" && parts[1] === "attempts" && parts.length === 2) {
-    const u = requireUser(); if (!u) return;
-    const body = await readJson(req);
+  { method: "POST", path: "/api/attempts", auth: "user", body: true, handler({ res, db, body, user }) {
     const name = cleanName(body.puzzle);
     if (!name) return sendJson(res, 400, { error: "bad puzzle" });
     const puzzle = db.puzzleByName(name);
@@ -348,19 +371,17 @@ async function handleApi(req, res, url, db) {
     // shortest-known-solve with 1 or a negative number. Ignore the rest.
     const opt = toInt(body.optimal);
     if (opt != null && opt >= 1 && opt <= puzzle.par) db.recordOptimal(puzzle.id, opt);
-    return sendJson(res, 201, { attemptId: db.startAttempt(u.id, puzzle.id) });
-  }
+    return sendJson(res, 201, { attemptId: db.startAttempt(user.id, puzzle.id) });
+  } },
 
   // PATCH /api/attempts/:id  { outcome, movesUsed, durationMs }
-  if (method === "PATCH" && parts[1] === "attempts" && parts.length === 3) {
-    const u = requireUser(); if (!u) return;
-    const id = toInt(parts[2]);
-    const body = await readJson(req);
+  { method: "PATCH", path: "/api/attempts/:id", auth: "user", body: true, handler({ res, db, params, body, user }) {
+    const id = toInt(params.id);
     if (!id || !VALID_OUTCOME.has(body.outcome)) {
       return sendJson(res, 400, { error: "bad attempt update" });
     }
     // Find the attempt's puzzle (and confirm it's the caller's own open attempt).
-    const row = db.openAttempt(id, u.id);
+    const row = db.openAttempt(id, user.id);
     if (!row) return sendJson(res, 404, { error: "no such open attempt" });
     const puzzleId = row.puzzle_id;
     const movesUsed = Math.max(0, toInt(body.movesUsed) ?? 0);
@@ -389,19 +410,19 @@ async function handleApi(req, res, url, db) {
         return sendJson(res, 400, { error: "movesUsed below the proven optimal" });
       }
     }
-    const prevBest = db.userBest(u.id, puzzleId); // before recording this outcome
-    db.finishAttempt(id, u.id, { outcome: body.outcome, movesUsed, durationMs, moveSeq });
+    const prevBest = db.userBest(user.id, puzzleId); // before recording this outcome
+    db.finishAttempt(id, user.id, { outcome: body.outcome, movesUsed, durationMs, moveSeq });
     return sendJson(res, 200, {
-      best: db.userBest(u.id, puzzleId),
+      best: db.userBest(user.id, puzzleId),
       worldBest: db.worldBest(puzzleId),
       isRecord: body.outcome === "won" && (prevBest == null || movesUsed < prevBest),
     });
-  }
+  } },
 
   // POST /api/attempts/:id/abandon  { token, movesUsed, durationMs }  (beacon)
-  if (method === "POST" && parts[1] === "attempts" && parts[3] === "abandon") {
-    const id = toInt(parts[2]);
-    const body = await readJson(req);
+  // No auth guard: sendBeacon can't set headers, so the token rides in the body.
+  { method: "POST", path: "/api/attempts/:id/abandon", body: true, handler({ req, res, db, params, body }) {
+    const id = toInt(params.id);
     const u = db.userByToken(body.token || bearer(req));
     if (u && id) {
       db.finishAttempt(id, u.id, {
@@ -411,196 +432,183 @@ async function handleApi(req, res, url, db) {
       });
     }
     res.writeHead(204); return res.end();
-  }
+  } },
 
   // POST /api/auth/passkey/register/options  (requires auth)
-  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'register' && parts[4] === 'options') {
-    if (limited("passkey", 30)) return;
-    const u = requireUser(); if (!u) return;
-    const challenge = generateChallenge();
-    db.saveChallenge(challenge, u.id, 'register');
-    const rpId = getRpId(req);
-    const userIdBuf = Buffer.alloc(8);
-    userIdBuf.writeBigInt64BE(BigInt(u.id));
-    return sendJson(res, 200, {
-      challenge,
-      rp: { name: 'kCubeGL', id: rpId },
-      user: { id: userIdBuf.toString('base64url'), name: u.username, displayName: u.username },
-      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
-      timeout: 60000,
-      attestation: 'none',
-      authenticatorSelection: { userVerification: 'preferred', residentKey: 'preferred' },
-    });
-  }
+  { method: "POST", path: "/api/auth/passkey/register/options", auth: "user", limit: { bucket: "passkey", max: 30 },
+    handler({ req, res, db, user }) {
+      const challenge = generateChallenge();
+      db.saveChallenge(challenge, user.id, 'register');
+      const rpId = getRpId(req);
+      const userIdBuf = Buffer.alloc(8);
+      userIdBuf.writeBigInt64BE(BigInt(user.id));
+      return sendJson(res, 200, {
+        challenge,
+        rp: { name: 'kCubeGL', id: rpId },
+        user: { id: userIdBuf.toString('base64url'), name: user.username, displayName: user.username },
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+        timeout: 60000,
+        attestation: 'none',
+        authenticatorSelection: { userVerification: 'preferred', residentKey: 'preferred' },
+      });
+    } },
 
   // POST /api/auth/passkey/register/verify  (requires auth)
-  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'register' && parts[4] === 'verify') {
-    if (limited("passkey", 30)) return;
-    const u = requireUser(); if (!u) return;
-    const body = await readJson(req);
-    if (!body.credential?.response) return sendJson(res, 400, { error: 'missing credential' });
-    let clientData;
-    try {
-      clientData = JSON.parse(Buffer.from(body.credential.response.clientDataJSON, 'base64url').toString('utf8'));
-    } catch { return sendJson(res, 400, { error: 'invalid clientDataJSON' }); }
-    const challengeRow = db.consumeChallenge(clientData.challenge, 'register');
-    if (!challengeRow) return sendJson(res, 400, { error: 'invalid or expired challenge' });
-    if (challengeRow.user_id !== u.id) return sendJson(res, 400, { error: 'challenge user mismatch' });
-    try {
-      const result = verifyRegistration(body.credential, challengeRow.challenge, getOrigin(req), getRpId(req));
-      db.createPasskey(u.id, result.credentialId, result.publicKey, result.counter);
-      return sendJson(res, 200, { ok: true });
-    } catch (e) {
-      console.error("[kcube] passkey registration failed", e);
-      return sendJson(res, 400, { error: "passkey registration failed" });
-    }
-  }
+  { method: "POST", path: "/api/auth/passkey/register/verify", auth: "user", body: true, limit: { bucket: "passkey", max: 30 },
+    handler({ req, res, db, body, user }) {
+      if (!body.credential?.response) return sendJson(res, 400, { error: 'missing credential' });
+      let clientData;
+      try {
+        clientData = JSON.parse(Buffer.from(body.credential.response.clientDataJSON, 'base64url').toString('utf8'));
+      } catch { return sendJson(res, 400, { error: 'invalid clientDataJSON' }); }
+      const challengeRow = db.consumeChallenge(clientData.challenge, 'register');
+      if (!challengeRow) return sendJson(res, 400, { error: 'invalid or expired challenge' });
+      if (challengeRow.user_id !== user.id) return sendJson(res, 400, { error: 'challenge user mismatch' });
+      try {
+        const result = verifyRegistration(body.credential, challengeRow.challenge, getOrigin(req), getRpId(req));
+        db.createPasskey(user.id, result.credentialId, result.publicKey, result.counter);
+        return sendJson(res, 200, { ok: true });
+      } catch (e) {
+        console.error("[kcube] passkey registration failed", e);
+        return sendJson(res, 400, { error: "passkey registration failed" });
+      }
+    } },
 
   // POST /api/auth/passkey/login/options
-  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'login' && parts[4] === 'options') {
-    if (limited("passkey", 30)) return;
-    const challenge = generateChallenge();
-    db.saveChallenge(challenge, null, 'login');
-    return sendJson(res, 200, {
-      challenge,
-      timeout: 60000,
-      rpId: getRpId(req),
-      userVerification: 'preferred',
-      allowCredentials: [],
-    });
-  }
+  { method: "POST", path: "/api/auth/passkey/login/options", limit: { bucket: "passkey", max: 30 },
+    handler({ req, res, db }) {
+      const challenge = generateChallenge();
+      db.saveChallenge(challenge, null, 'login');
+      return sendJson(res, 200, {
+        challenge,
+        timeout: 60000,
+        rpId: getRpId(req),
+        userVerification: 'preferred',
+        allowCredentials: [],
+      });
+    } },
 
   // POST /api/auth/passkey/login/verify
-  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'passkey' && parts[3] === 'login' && parts[4] === 'verify') {
-    if (limited("passkey", 30)) return;
-    const body = await readJson(req);
-    if (!body.assertion?.response) return sendJson(res, 400, { error: 'missing assertion' });
-    let clientData;
-    try {
-      clientData = JSON.parse(Buffer.from(body.assertion.response.clientDataJSON, 'base64url').toString('utf8'));
-    } catch { return sendJson(res, 400, { error: 'invalid clientDataJSON' }); }
-    const challengeRow = db.consumeChallenge(clientData.challenge, 'login');
-    if (!challengeRow) return sendJson(res, 400, { error: 'invalid or expired challenge' });
-    const credentialId = body.assertion.id || body.assertion.rawId;
-    const passkey = db.getPasskeyById(credentialId);
-    if (!passkey) return sendJson(res, 400, { error: 'unknown credential' });
-    try {
-      const { counter } = verifyAssertion(body.assertion, passkey.public_key, passkey.counter, challengeRow.challenge, getOrigin(req), getRpId(req));
-      db.updatePasskeyCounter(credentialId, counter);
-      const user = db.getUserByIdFull(passkey.user_id);
-      if (!user) return sendJson(res, 500, { error: 'user not found' });
-      return sendJson(res, 200, { token: user.token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
-    } catch (e) {
-      console.error("[kcube] passkey login failed", e);
-      return sendJson(res, 400, { error: "passkey login failed" });
-    }
-  }
+  { method: "POST", path: "/api/auth/passkey/login/verify", body: true, limit: { bucket: "passkey", max: 30 },
+    handler({ req, res, db, body }) {
+      if (!body.assertion?.response) return sendJson(res, 400, { error: 'missing assertion' });
+      let clientData;
+      try {
+        clientData = JSON.parse(Buffer.from(body.assertion.response.clientDataJSON, 'base64url').toString('utf8'));
+      } catch { return sendJson(res, 400, { error: 'invalid clientDataJSON' }); }
+      const challengeRow = db.consumeChallenge(clientData.challenge, 'login');
+      if (!challengeRow) return sendJson(res, 400, { error: 'invalid or expired challenge' });
+      const credentialId = body.assertion.id || body.assertion.rawId;
+      const passkey = db.getPasskeyById(credentialId);
+      if (!passkey) return sendJson(res, 400, { error: 'unknown credential' });
+      try {
+        const { counter } = verifyAssertion(body.assertion, passkey.public_key, passkey.counter, challengeRow.challenge, getOrigin(req), getRpId(req));
+        db.updatePasskeyCounter(credentialId, counter);
+        const user = db.getUserByIdFull(passkey.user_id);
+        if (!user) return sendJson(res, 500, { error: 'user not found' });
+        return sendJson(res, 200, { token: user.token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
+      } catch (e) {
+        console.error("[kcube] passkey login failed", e);
+        return sendJson(res, 400, { error: "passkey login failed" });
+      }
+    } },
 
   // POST /api/auth/password/login  { username, password }
-  if (method === 'POST' && parts[1] === 'auth' && parts[2] === 'password' && parts[3] === 'login') {
-    if (limited("login", 30)) return;
-    const body = await readJson(req);
-    const username = typeof body.username === 'string' ? body.username.trim() : '';
-    const password = typeof body.password === 'string' ? body.password : '';
-    if (!username || !password) return sendJson(res, 400, { error: 'username and password required' });
-    const dummyHash = await dummyHashPromise;
-    const user = db.getUserByUsername(username);
-    // Always run verify (even against a dummy hash) to prevent user-enumeration via timing.
-    const valid = await verifyPassword(user?.passwordHash ?? dummyHash, password);
-    if (!valid || !user?.passwordHash) return sendJson(res, 401, { error: 'invalid credentials' });
-    return sendJson(res, 200, { token: user.token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
-  }
+  { method: "POST", path: "/api/auth/password/login", body: true, limit: { bucket: "login", max: 30 },
+    async handler({ res, db, body }) {
+      const username = typeof body.username === 'string' ? body.username.trim() : '';
+      const password = typeof body.password === 'string' ? body.password : '';
+      if (!username || !password) return sendJson(res, 400, { error: 'username and password required' });
+      const dummyHash = await dummyHashPromise;
+      const user = db.getUserByUsername(username);
+      // Always run verify (even against a dummy hash) to prevent user-enumeration via timing.
+      const valid = await verifyPassword(user?.passwordHash ?? dummyHash, password);
+      if (!valid || !user?.passwordHash) return sendJson(res, 401, { error: 'invalid credentials' });
+      return sendJson(res, 200, { token: user.token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
+    } },
 
   // GET /api/admin/users
-  if (method === 'GET' && parts[1] === 'admin' && parts[2] === 'users' && parts.length === 3) {
-    const u = requireAdmin(); if (!u) return;
+  { method: "GET", path: "/api/admin/users", auth: "admin", handler({ res, db }) {
     return sendJson(res, 200, db.listUsers());
-  }
+  } },
 
   // PATCH /api/admin/users/:id  { isAdmin }
-  if (method === 'PATCH' && parts[1] === 'admin' && parts[2] === 'users' && parts.length === 4) {
-    const u = requireAdmin(); if (!u) return;
-    const targetId = toInt(parts[3]);
+  { method: "PATCH", path: "/api/admin/users/:id", auth: "admin", body: true, handler({ res, db, params, body, user }) {
+    const targetId = toInt(params.id);
     if (!targetId) return sendJson(res, 400, { error: 'bad user id' });
-    const body = await readJson(req);
     // Require a real boolean: a truthy string like "false" must not grant admin.
     if (typeof body.isAdmin !== 'boolean') return sendJson(res, 400, { error: 'isAdmin must be a boolean' });
-    if (targetId === u.id && body.isAdmin === false) {
+    if (targetId === user.id && body.isAdmin === false) {
       return sendJson(res, 400, { error: "can't remove your own admin status" });
     }
     db.setUserAdmin(targetId, body.isAdmin);
     return sendJson(res, 200, { ok: true });
-  }
+  } },
 
   // DELETE /api/admin/users/:id
-  if (method === 'DELETE' && parts[1] === 'admin' && parts[2] === 'users' && parts.length === 4) {
-    const u = requireAdmin(); if (!u) return;
-    const targetId = toInt(parts[3]);
+  { method: "DELETE", path: "/api/admin/users/:id", auth: "admin", handler({ res, db, params, user }) {
+    const targetId = toInt(params.id);
     if (!targetId) return sendJson(res, 400, { error: 'bad user id' });
-    if (targetId === u.id) return sendJson(res, 400, { error: "can't delete yourself" });
+    if (targetId === user.id) return sendJson(res, 400, { error: "can't delete yourself" });
     db.deleteUser(targetId);
     return sendJson(res, 200, { ok: true });
-  }
+  } },
 
   // POST /api/admin/users/:id/reset-password  { newPassword }
   // Set a new password for any user. Pass newPassword as empty/null to clear it.
-  if (method === 'POST' && parts[1] === 'admin' && parts[2] === 'users' && parts[4] === 'reset-password' && parts.length === 5) {
-    const u = requireAdmin(); if (!u) return;
-    const targetId = toInt(parts[3]);
-    if (!targetId) return sendJson(res, 400, { error: 'bad user id' });
-    const body = await readJson(req);
-    const newPassword = typeof body.newPassword === 'string' ? body.newPassword : null;
-    if (newPassword !== null && newPassword !== '' && (newPassword.length < 8 || newPassword.length > 128)) {
-      return sendJson(res, 400, { error: 'password must be 8–128 characters' });
-    }
-    const passwordHash = (newPassword && newPassword.length >= 8)
-      ? await hashPassword(newPassword)
-      : null;
-    db.setUserPassword(targetId, passwordHash);
-    return sendJson(res, 200, { ok: true, hasPassword: !!passwordHash });
-  }
+  // Rate-limited like the other credential endpoints: it feeds password login.
+  { method: "POST", path: "/api/admin/users/:id/reset-password", auth: "admin", body: true, limit: { bucket: "admin", max: 30 },
+    async handler({ res, db, params, body }) {
+      const targetId = toInt(params.id);
+      if (!targetId) return sendJson(res, 400, { error: 'bad user id' });
+      const newPassword = typeof body.newPassword === 'string' ? body.newPassword : null;
+      if (newPassword !== null && newPassword !== '' && (newPassword.length < 8 || newPassword.length > 128)) {
+        return sendJson(res, 400, { error: 'password must be 8–128 characters' });
+      }
+      const passwordHash = (newPassword && newPassword.length >= 8)
+        ? await hashPassword(newPassword)
+        : null;
+      db.setUserPassword(targetId, passwordHash);
+      return sendJson(res, 200, { ok: true, hasPassword: !!passwordHash });
+    } },
 
   // GET /api/admin/puzzles  — full catalogue with stats, for the ordering UI.
-  if (method === 'GET' && parts[1] === 'admin' && parts[2] === 'puzzles' && parts.length === 3) {
-    const u = requireAdmin(); if (!u) return;
-    return sendJson(res, 200, db.listPuzzles(u.id));
-  }
+  { method: "GET", path: "/api/admin/puzzles", auth: "admin", handler({ res, db, user }) {
+    return sendJson(res, 200, db.listPuzzles(user.id));
+  } },
 
   // POST /api/admin/puzzles/:id/solve  — run the full (BFS) + beam solvers for
   // one puzzle and persist the results. Explicit, admin-triggered step; it can
   // block for a few seconds on the hardest boards, so it's never run at boot.
-  if (method === 'POST' && parts[1] === 'admin' && parts[2] === 'puzzles' && parts[4] === 'solve' && parts.length === 5) {
-    const u = requireAdmin(); if (!u) return;
-    const id = toInt(parts[3]);
-    if (!id) return sendJson(res, 400, { error: 'bad puzzle id' });
-    const row = db.puzzleById(id);
-    if (!row) return sendJson(res, 404, { error: `puzzle ${id} not found` });
-    try {
-      // Run the CPU-heavy solvers off the event loop, then persist the result.
-      const r = await runSolverWorker({ seed: row.seed, numCubes: row.num_cubes, scramble: row.scramble });
-      return sendJson(res, 200, db.saveSolveResult(id, r));
-    } catch (e) {
-      console.error('[kcube] solver worker failed', e && e.stack ? e.stack : e);
-      return sendJson(res, 500, { error: 'solver failed' });
-    }
-  }
+  // Tighter rate limit than the auth endpoints: each call ties up a worker thread.
+  { method: "POST", path: "/api/admin/puzzles/:id/solve", auth: "admin", limit: { bucket: "solve", max: 10 },
+    async handler({ res, db, params }) {
+      const id = toInt(params.id);
+      if (!id) return sendJson(res, 400, { error: 'bad puzzle id' });
+      const row = db.puzzleById(id);
+      if (!row) return sendJson(res, 404, { error: `puzzle ${id} not found` });
+      try {
+        // Run the CPU-heavy solvers off the event loop, then persist the result.
+        const r = await runSolverWorker({ seed: row.seed, numCubes: row.num_cubes, scramble: row.scramble });
+        return sendJson(res, 200, db.saveSolveResult(id, r));
+      } catch (e) {
+        console.error('[kcube] solver worker failed', e && e.stack ? e.stack : e);
+        return sendJson(res, 500, { error: 'solver failed' });
+      }
+    } },
 
   // PUT /api/admin/puzzles/order  { ids: [...] }  — set the exact pinned order.
-  if (method === 'PUT' && parts[1] === 'admin' && parts[2] === 'puzzles' && parts[3] === 'order') {
-    const u = requireAdmin(); if (!u) return;
-    const body = await readJson(req);
+  { method: "PUT", path: "/api/admin/puzzles/order", auth: "admin", body: true, handler({ res, db, body }) {
     const ids = Array.isArray(body.ids) ? body.ids.map(toInt).filter((n) => n != null) : null;
     if (!ids) return sendJson(res, 400, { error: 'bad ids' });
     db.reorderPinned(ids);
     return sendJson(res, 200, { ok: true });
-  }
+  } },
 
   // PATCH /api/admin/puzzles/:id  { pinned, sortOrder }
-  if (method === 'PATCH' && parts[1] === 'admin' && parts[2] === 'puzzles' && parts.length === 4) {
-    const u = requireAdmin(); if (!u) return;
-    const id = toInt(parts[3]);
+  { method: "PATCH", path: "/api/admin/puzzles/:id", auth: "admin", body: true, handler({ res, db, params, body }) {
+    const id = toInt(params.id);
     if (!id) return sendJson(res, 400, { error: 'bad puzzle id' });
-    const body = await readJson(req);
     try {
       db.setPuzzleOrder(id, {
         pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
@@ -611,10 +619,11 @@ async function handleApi(req, res, url, db) {
       throw e;
     }
     return sendJson(res, 200, { ok: true });
-  }
+  } },
+];
 
-  return sendJson(res, 404, { error: "not found" });
-}
+// Pre-split every route pattern once so per-request matching is just an array walk.
+for (const r of ROUTES) r.segs = r.path.split("/").filter(Boolean);
 
 /* --- server ----------------------------------------------------------------- */
 

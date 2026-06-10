@@ -107,7 +107,12 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   // Additive migrations: add columns missing from DBs created by older schemas.
+  // Table names can't be bound parameters, so they're interpolated into the
+  // PRAGMA/ALTER below — restrict them to the known schema tables so a future
+  // caller can't accidentally turn this into SQL injection.
+  const MIGRATABLE = new Set(["users", "passkeys", "webauthn_challenges", "puzzles", "attempts"]);
   const addColumn = (table, name, ddl) => {
+    if (!MIGRATABLE.has(table)) throw new Error(`addColumn: unknown table ${table}`);
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === name)) {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${ddl};`);
     }

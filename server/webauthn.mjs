@@ -107,6 +107,15 @@ export function verifyRegistration(credential, expectedChallenge, expectedOrigin
 
   const attObjBuf = fromb64u(credential.response.attestationObject);
   const { v: attObj } = decodeCBOR(attObjBuf);
+  // We request attestation:'none', so the only acceptable format is 'none'
+  // with an empty attestation statement. Reject anything else explicitly
+  // rather than silently ignoring a statement we don't verify.
+  const fmt = attObj.get('fmt');
+  if (fmt !== 'none') throw new Error(`unsupported attestation format: ${fmt}`);
+  const attStmt = attObj.get('attStmt');
+  if (!(attStmt instanceof Map) || attStmt.size !== 0) {
+    throw new Error("attStmt must be empty for attestation format 'none'");
+  }
   const authDataRaw = attObj.get('authData');
   if (!authDataRaw) throw new Error('missing authData');
   const authData = Buffer.isBuffer(authDataRaw) ? authDataRaw : Buffer.from(authDataRaw);
@@ -145,7 +154,13 @@ export function verifyAssertion(assertion, storedPublicKeyJson, storedCounter, e
   if (!parsed.rpIdHash.equals(expectedRpIdHash)) throw new Error('rpId hash mismatch');
   if (!parsed.UP) throw new Error('user not present');
 
-  if (storedCounter > 0 && parsed.signCount !== 0 && parsed.signCount <= storedCounter) {
+  // Clone detection: once a credential has ever reported a nonzero counter,
+  // require it to be strictly increasing. Authenticators that don't implement
+  // counters always report 0 — for those storedCounter stays 0 and they remain
+  // exempt — but one that has counted can never regress, so a clone can't dodge
+  // the check by reporting 0. (The stored counter itself is also never lowered;
+  // see db.updatePasskeyCounter.)
+  if (storedCounter > 0 && parsed.signCount <= storedCounter) {
     throw new Error('counter did not increase (possible cloned authenticator)');
   }
 

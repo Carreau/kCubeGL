@@ -30,6 +30,53 @@ export const OPPOSITE = {
   ArrowUp: "ArrowDown", ArrowDown: "ArrowUp",
 };
 
+/* --- Board helpers ----------------------------------------------------------
+ * Shared by the generator (src/level-gen.mjs), the solvers (src/solver.mjs) and
+ * the game (src/main.js). All of them keep cube positions as plain `r`/`c`
+ * fields, so one implementation serves every representation.
+ * ------------------------------------------------------------------------- */
+
+// The cube occupying cell (r, c), or null.
+export function cubeAt(cubes, r, c) {
+  for (const k of cubes) if (k.r === r && k.c === c) return k;
+  return null;
+}
+
+// All cubes 4-connected to `start` (its island), including `start` itself.
+export function islandOf(cubes, start) {
+  const island = [start];
+  const seen = new Set([start]);
+  for (let i = 0; i < island.length; i++) {
+    const c = island[i];
+    for (const [dr, dc] of NEI) {
+      const n = cubeAt(cubes, c.r + dr, c.c + dc);
+      if (n && !seen.has(n)) { seen.add(n); island.push(n); }
+    }
+  }
+  return island;
+}
+
+// Are the given [r,c] cells a single 4-connected (N/S/E/W) block?
+export function cellsConnected(cells) {
+  if (cells.length <= 1) return true;
+  const set = new Set(cells.map(([r, c]) => r * BOARD + c));
+  const seen = new Set();
+  const stack = [cells[0]];
+  seen.add(cells[0][0] * BOARD + cells[0][1]);
+  while (stack.length) {
+    const [r, c] = stack.pop();
+    for (const [dr, dc] of NEI) {
+      const nr = r + dr, nc = c + dc;
+      // Bounds-check BEFORE encoding: r*BOARD+c with an off-board nc wraps onto a
+      // neighbouring row's cell, which would falsely bridge two disjoint islands.
+      if (!inBounds(nr, nc)) continue;
+      const k = nr * BOARD + nc;
+      if (set.has(k) && !seen.has(k)) { seen.add(k); stack.push([nr, nc]); }
+    }
+  }
+  return seen.size === set.size;
+}
+
 // Six distinct face colours — index doubles as the face id.
 // Kept in shared.mjs (pure, no DOM) so the landing page and server can use it.
 export const COLORS = [

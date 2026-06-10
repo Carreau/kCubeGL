@@ -2,10 +2,6 @@ import * as api from './api.mjs';
 import { setupTheme } from './theme.mjs';
 import { $, esc, avatarHtml, setStatus } from './ui.mjs';
 
-function setMsg(text, isErr = false) {
-  setStatus($('formMsg'), text, isErr);
-}
-
 function renderAvatar(user) {
   const box = $('avatarPreview');
   if (!user) { box.innerHTML = ''; return; }
@@ -18,25 +14,25 @@ function renderAvatar(user) {
 async function save(e) {
   e.preventDefault();
   const email = $('emailInput').value.trim();
-  if (!email) { setMsg('Enter an email address.', true); return; }
+  if (!email) { setStatus('formMsg', 'Enter an email address.', true); return; }
   $('saveBtn').disabled = true;
   const result = await api.updateEmail(email);
   $('saveBtn').disabled = false;
-  if (!result) { setMsg('Could not reach server. Try again.', true); return; }
+  if (!result) { setStatus('formMsg', 'Could not reach server. Try again.', true); return; }
   renderAvatar({ ...state.user, avatarHash: result.avatarHash });
   state.user = { ...state.user, avatarHash: result.avatarHash };
   $('emailInput').value = '';
-  setMsg('Avatar updated!');
+  setStatus('formMsg', 'Avatar updated!');
 }
 
 async function clear() {
   $('clearBtn').disabled = true;
   const result = await api.updateEmail('');
   $('clearBtn').disabled = false;
-  if (!result) { setMsg('Could not reach server. Try again.', true); return; }
+  if (!result) { setStatus('formMsg', 'Could not reach server. Try again.', true); return; }
   state.user = { ...state.user, avatarHash: null };
   renderAvatar(state.user);
-  setMsg('Avatar removed.');
+  setStatus('formMsg', 'Avatar removed.');
 }
 
 const state = { user: null };
@@ -44,7 +40,7 @@ const state = { user: null };
 async function boot() {
   const online = await api.probe();
   if (!online) {
-    setMsg('Server is offline. Settings require a connection.', true);
+    setStatus('formMsg', 'Server is offline. Settings require a connection.', true);
     return;
   }
   const me = await api.me();

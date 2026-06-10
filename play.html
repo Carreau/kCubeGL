@@ -3,10 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://unpkg.com 'sha256-VofFY8klmktlclSOfMSg5hON4BMwUzcczVmt1A9sGLY=' 'sha256-gsOG4hlMQkkqkfIq7NjltJE/B5TZSKKKZfAN120Ui/E=' 'sha256-kVYO0ltRgFGyFqNULHlhK2rhKwf4/bZDuGt/RZC2xsM='; style-src 'self' 'unsafe-inline'; img-src 'self' https://www.gravatar.com data:; connect-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://unpkg.com 'sha256-gsOG4hlMQkkqkfIq7NjltJE/B5TZSKKKZfAN120Ui/E=' 'sha256-kVYO0ltRgFGyFqNULHlhK2rhKwf4/bZDuGt/RZC2xsM='; style-src 'self' 'unsafe-inline'; img-src 'self' https://www.gravatar.com data:; connect-src 'self'" />
   <title>kCube — play</title>
+  <!-- Render-blocking, before the stylesheet: applies the theme pre-paint -->
+  <script src="src/theme-init.js"></script>
   <link rel="stylesheet" href="src/styles.css" />
-  <script>(function(){var t=localStorage.getItem('kcube.theme')||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');document.documentElement.setAttribute('data-theme',t);})()</script>
   <!-- Hide the HUD Gravatar if it fails to load (capture-phase: error doesn't
        bubble). A listener instead of an inline onerror keeps the page CSP-safe. -->
   <script>document.addEventListener('error',function(e){var t=e.target;if(t&&t.id==='userAvatar')t.hidden=true},true)</script>

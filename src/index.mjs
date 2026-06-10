@@ -16,7 +16,7 @@
 import * as api from "./api.mjs";
 import { buildCatalog } from "./shared.mjs";
 import { setupTheme } from "./theme.mjs";
-import { $, esc, dash, pct, fmtMs, avatarHtml } from "./ui.mjs";
+import { $, esc, dash, pct, fmt1, fmtMs, avatarHtml, renderAccountWidget } from "./ui.mjs";
 
 const LOCAL_KEY = "kcube.v1"; // same store the game writes best scores to
 
@@ -53,17 +53,12 @@ function renderAccount() {
     box.innerHTML = `<span class="who-pill offline-pill">offline</span>`;
     return;
   }
-  if (state.user) {
-    box.innerHTML =
-      `<span class="who-pill">${avatarHtml(state.user)}@${esc(state.user.username)}</span>` +
-      (state.user.isAdmin ? `<a href="admin.html" class="link-btn">Admin</a>` : '') +
-      `<a href="settings.html" class="link-btn">Settings</a>` +
-      `<button id="signout" class="link-btn" type="button">Sign out</button>`;
-    $("signout").addEventListener("click", () => { api.clearToken(); boot(); });
-    return;
-  }
-  box.innerHTML =
-    `<a href="login.html" class="primary" style="text-decoration:none;font-size:13px;padding:8px 18px">Sign In</a>`;
+  renderAccountWidget(box, state.user, {
+    avatar: true,
+    adminLink: true,
+    settingsLink: true,
+    onSignOut: () => { api.clearToken(); boot(); },
+  });
 }
 
 /* --- your skill summary ----------------------------------------------------- */
@@ -77,7 +72,7 @@ async function renderMyStats() {
     ["Puzzles solved", dash(s.solved)],
     ["Attempts", dash(s.attempts)],
     ["Win rate", s.attempts ? pct(s.winRate) : "–"],
-    ["Avg moves over best-known", s.avgMovesOverOptimal == null ? "–" : "+" + s.avgMovesOverOptimal.toFixed(1)],
+    ["Avg moves over best-known", s.avgMovesOverOptimal == null ? "–" : "+" + fmt1(s.avgMovesOverOptimal)],
     ["Avg solve time", fmtMs(s.avgDurationMs)],
   ];
   box.innerHTML =
@@ -302,9 +297,9 @@ async function openDetail(name) {
     ["Failure rate", st.attempts ? pct(st.failRate) : "–"],
     ["Scramble length", dash(info.scramble)],
     ["World best", dash(info.worldBest)],
-    ["Avg winning moves", st.avgMoves == null ? "–" : st.avgMoves.toFixed(1)],
-    ["Avg attempts to first solve", st.avgAttemptsToSolve == null ? "–" : st.avgAttemptsToSolve.toFixed(1)],
-    ["Avg attempts to personal best", st.avgAttemptsToBest == null ? "–" : st.avgAttemptsToBest.toFixed(1)],
+    ["Avg winning moves", fmt1(st.avgMoves)],
+    ["Avg attempts to first solve", fmt1(st.avgAttemptsToSolve)],
+    ["Avg attempts to personal best", fmt1(st.avgAttemptsToBest)],
     ["Avg solve time", fmtMs(st.avgDurationMs)],
   ];
 
