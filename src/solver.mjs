@@ -21,7 +21,7 @@
  * orientation is sufficient.
  * =========================================================================== */
 
-import { BOARD, NEI, OPPOSITE, inBounds } from "./shared.mjs";
+import { BOARD, NEI, OPPOSITE, inBounds, cubeAt, islandOf } from "./shared.mjs";
 import { DIRS as GEN_DIRS, qAxisAngle, qMul, quatToFaces } from "./level-gen.mjs";
 
 const DIRS = Object.keys(GEN_DIRS); // ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"]
@@ -40,29 +40,14 @@ const ROLL_DC = {};
   }
 }
 
-/* --- Low-level helpers ------------------------------------------------------- */
-
-function cubeAt(cubes, r, c) {
-  for (const k of cubes) if (k.r === r && k.c === c) return k;
-  return null;
-}
+/* --- Low-level helpers (cubeAt / islandOf live in shared.mjs) ----------------- */
 
 function topColor(cube) { return cube.faces[2]; }
 
 // All cubes 4-connected to `id` (the cursor's island).
 function getIsland(cubes, id) {
   const start = cubes.find(c => c.id === id);
-  if (!start) return [];
-  const island = [start];
-  const seen = new Set([id]);
-  for (let i = 0; i < island.length; i++) {
-    const c = island[i];
-    for (const [dr, dc] of NEI) {
-      const n = cubeAt(cubes, c.r + dr, c.c + dc);
-      if (n && !seen.has(n.id)) { seen.add(n.id); island.push(n); }
-    }
-  }
-  return island;
+  return start ? islandOf(cubes, start) : [];
 }
 
 function isContiguous(cubes) {

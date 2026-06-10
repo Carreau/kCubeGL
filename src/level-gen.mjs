@@ -16,7 +16,10 @@
  * the browser can hand it straight to THREE.Quaternion.fromArray().
  * ========================================================================== */
 
-import { mulberry32, shuffle, BOARD, NEI, OPPOSITE, inBounds } from "./shared.mjs";
+import {
+  mulberry32, shuffle, BOARD, NEI, OPPOSITE, inBounds,
+  cubeAt, islandOf, cellsConnected,
+} from "./shared.mjs";
 
 // Fixed mapping from a cube's LOCAL face axis -> colour id. Order matches a
 // BoxGeometry's material groups (+X,-X,+Y,-Y,+Z,-Z) and main.js's FACE_MATERIALS.
@@ -119,10 +122,7 @@ function faceUpQuat(colorId) {
   return qFromUnitVectors(face.v, [0, 1, 0]);
 }
 
-/* --- board helpers ---------------------------------------------------------- */
-
-function cubeAt(cubes, r, c) { return cubes.find((k) => k.row === r && k.col === c) || null; }
-function occupied(cubes, r, c) { return cubes.some((k) => k.row === r && k.col === c); }
+/* --- board helpers (cubeAt / islandOf / cellsConnected live in shared.mjs) --- */
 
 // Grow a random 4-connected blob of n cells from the board centre. `rint(n)`
 // returns an integer in [0, n) from the puzzle's seeded PRNG.
@@ -149,55 +149,20 @@ function connectedCells(n, rint) {
   return chosen;
 }
 
-// All cubes 4-connected to `cube` (its island), including `cube` itself.
-function islandOf(cubes, cube) {
-  const island = [cube];
-  const seen = new Set([cube]);
-  for (let i = 0; i < island.length; i++) {
-    const c = island[i];
-    for (const [dr, dc] of NEI) {
-      const n = cubeAt(cubes, c.row + dr, c.col + dc);
-      if (n && !seen.has(n)) { seen.add(n); island.push(n); }
-    }
-  }
-  return island;
-}
-
-// Are the given [row,col] cells a single 4-connected (N/S/E/W) block?
-export function cellsConnected(cells) {
-  if (cells.length <= 1) return true;
-  const set = new Set(cells.map(([r, c]) => r * BOARD + c));
-  const seen = new Set();
-  const stack = [cells[0]];
-  seen.add(cells[0][0] * BOARD + cells[0][1]);
-  while (stack.length) {
-    const [r, c] = stack.pop();
-    for (const [dr, dc] of NEI) {
-      const nr = r + dr, nc = c + dc;
-      // Bounds-check BEFORE encoding: r*BOARD+c with an off-board nc wraps onto a
-      // neighbouring row's cell, which would falsely bridge two disjoint islands.
-      if (!inBounds(nr, nc)) continue;
-      const k = nr * BOARD + nc;
-      if (set.has(k) && !seen.has(k)) { seen.add(k); stack.push([nr, nc]); }
-    }
-  }
-  return seen.size === set.size;
-}
-
 function topColorOf(cube) { return quatToFaces(cube.quat)[2]; }
 
 function isSolved(cubes) {
   if (!cubes.length) return false;
   const t = topColorOf(cubes[0]);
   return cubes.every((c) => topColorOf(c) === t) &&
-    cellsConnected(cubes.map((c) => [c.row, c.col]));
+    cellsConnected(cubes.map((c) => [c.r, c.c]));
 }
 
 // Apply a roll: premultiply the cube's orientation and move it one cell.
 function applyRoll(cube, dir, nr, nc) {
   cube.quat = qMul(qAxisAngle(dir.axis, dir.angle), cube.quat);
-  cube.row = nr;
-  cube.col = nc;
+  cube.r = nr;
+  cube.c = nc;
 }
 
 // Pick a random on-board, empty direction for `cube` (skipping forbidKey, the
@@ -207,8 +172,8 @@ function scrambleRoll(cubes, cube, rng, forbidKey) {
   for (const k of keys) {
     if (k === forbidKey) continue;
     const d = DIRS[k];
-    const nr = cube.row + d.dr, nc = cube.col + d.dc;
-    if (!inBounds(nr, nc) || occupied(cubes, nr, nc)) continue;
+    const nr = cube.r + d.dr, nc = cube.c + d.dc;
+    if (!inBounds(nr, nc) || cubeAt(cubes, nr, nc)) continue;
     applyRoll(cube, d, nr, nc);
     return k;
   }
@@ -226,7 +191,7 @@ function scrambleRoll(cubes, cube, rng, forbidKey) {
  * is identical on every device. Returns:
  *   {
  *     targetColor,                                  // the "solved" colour id
- *     cubes:    [{ row, col, quat:[x,y,z,w] }],     // scrambled state, creation order
+ *     cubes:    [{ r, c, quat:[x,y,z,w] }],         // scrambled state, creation order
  *     scramble: [{ cubeIndex, key }],               // the reverse-rolls, in order
  *     cursorIndex,                                  // start cursor (last-scrambled cube)
  *   }
@@ -243,7 +208,7 @@ export function generateLevel(config) {
   const baseQ = faceUpQuat(targetColor);
   const cubes = cells.map(([r, c]) => {
     const yQ = qAxisAngle([0, 1, 0], rint(4) * (Math.PI / 2));
-    return { row: r, col: c, quat: qMul(yQ, baseQ) };
+    return { r, c, quat: qMul(yQ, baseQ) };
   });
 
   const scrambleMoves = [];
@@ -288,7 +253,7 @@ export function generateLevel(config) {
 
   return {
     targetColor,
-    cubes: cubes.map((c) => ({ row: c.row, col: c.col, quat: c.quat })),
+    cubes: cubes.map((c) => ({ r: c.r, c: c.c, quat: c.quat })),
     scramble: scrambleMoves.map((m) => ({ cubeIndex: cubes.indexOf(m.cube), key: m.key })),
     cursorIndex: cubes.indexOf(firstCube),
   };

@@ -19,7 +19,7 @@ export function buildCatalogState(config) {
   const gen = generateLevel(config);
   return {
     state: {
-      cubes: gen.cubes.map((c, i) => ({ id: i, r: c.row, c: c.col, faces: quatToFaces(c.quat) })),
+      cubes: gen.cubes.map((c, i) => ({ id: i, r: c.r, c: c.c, faces: quatToFaces(c.quat) })),
       cursorId: gen.cursorIndex,
     },
     solutionLen: gen.scramble.length,

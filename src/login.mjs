@@ -1,40 +1,7 @@
 import * as api from './api.mjs';
 import { setupTheme } from './theme.mjs';
-import { $, setStatus as showStatus } from './ui.mjs';
-
-/* --- base64url <-> ArrayBuffer helpers -------------------------------------- */
-
-function b64uToAb(s) {
-  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-  const raw = atob(padded);
-  const buf = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
-  return buf.buffer;
-}
-
-function abToB64u(ab) {
-  const bytes = new Uint8Array(ab);
-  let raw = '';
-  for (const b of bytes) raw += String.fromCharCode(b);
-  return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-function credToJson(cred) {
-  const r = cred.response;
-  return {
-    id: cred.id,
-    rawId: abToB64u(cred.rawId),
-    type: cred.type,
-    response: {
-      clientDataJSON: abToB64u(r.clientDataJSON),
-      ...(r.attestationObject ? { attestationObject: abToB64u(r.attestationObject) } : {}),
-      ...(r.authenticatorData ? { authenticatorData: abToB64u(r.authenticatorData) } : {}),
-      ...(r.signature        ? { signature:         abToB64u(r.signature)         } : {}),
-      ...(r.userHandle && r.userHandle.byteLength > 0 ? { userHandle: abToB64u(r.userHandle) } : {}),
-    },
-  };
-}
+import { $, setStatus, clearStatus } from './ui.mjs';
+import { b64uToAb, credToJson } from './webauthn-utils.mjs';
 
 /* --- helpers ---------------------------------------------------------------- */
 
@@ -45,12 +12,6 @@ function returnUrl() {
   return (p && p.startsWith('/') && !p.startsWith('//') && !p.startsWith('/\\'))
     ? p : 'index.html';
 }
-
-function setStatus(msg, isErr = false) {
-  showStatus($('authStatus'), msg, isErr);
-}
-
-function clearStatus() { $('authStatus').classList.add('hidden'); }
 
 // Passkeys (WebAuthn) only work in a "secure context": HTTPS, or a loopback
 // host (localhost / 127.0.0.1 / [::1]). On a plain-HTTP dev server reached
@@ -80,11 +41,11 @@ const INSECURE_MSG =
 /* --- passkey login ---------------------------------------------------------- */
 
 async function doPasskeyLogin() {
-  clearStatus();
-  if (!secureContextOk()) { setStatus(INSECURE_MSG, true); return; }
+  clearStatus('authStatus');
+  if (!secureContextOk()) { setStatus('authStatus', INSECURE_MSG, true); return; }
   try {
     const options = await api.getPasskeyLoginOptions();
-    if (!options) { setStatus('Could not reach server.', true); return; }
+    if (!options) { setStatus('authStatus', 'Could not reach server.', true); return; }
 
     const assertion = await navigator.credentials.get({
       publicKey: {
@@ -95,10 +56,10 @@ async function doPasskeyLogin() {
         allowCredentials: (options.allowCredentials || []).map(c => ({ ...c, id: b64uToAb(c.id) })),
       },
     });
-    if (!assertion) { setStatus('Passkey sign-in cancelled.', true); return; }
+    if (!assertion) { setStatus('authStatus', 'Passkey sign-in cancelled.', true); return; }
 
     const result = await api.verifyPasskeyLogin(credToJson(assertion));
-    if (!result?.token) { setStatus('Passkey verification failed.', true); return; }
+    if (!result?.token) { setStatus('authStatus', 'Passkey verification failed.', true); return; }
 
     // api.verifyPasskeyLogin stored the token (like createUser/passwordLogin).
     location.href = returnUrl();
@@ -107,7 +68,7 @@ async function doPasskeyLogin() {
     if (e?.name === 'NotAllowedError') msg = 'Passkey sign-in was cancelled.';
     else if (e?.name === 'SecurityError') msg = INSECURE_MSG;
     else msg = `Passkey sign-in failed: ${e?.message || e}`;
-    setStatus(msg, true);
+    setStatus('authStatus', msg, true);
   }
 }
 
@@ -205,11 +166,11 @@ async function doRegister(e) {
 /* --- passkey registration (after account creation) ------------------------- */
 
 async function doAddPasskey() {
-  clearStatus();
-  if (!secureContextOk()) { setStatus(INSECURE_MSG, true); return; }
+  clearStatus('authStatus');
+  if (!secureContextOk()) { setStatus('authStatus', INSECURE_MSG, true); return; }
   try {
     const options = await api.getPasskeyRegisterOptions();
-    if (!options) { setStatus('Could not get passkey options from server.', true); return; }
+    if (!options) { setStatus('authStatus', 'Could not get passkey options from server.', true); return; }
 
     const credential = await navigator.credentials.create({
       publicKey: {
@@ -226,20 +187,20 @@ async function doAddPasskey() {
         authenticatorSelection: options.authenticatorSelection,
       },
     });
-    if (!credential) { setStatus('Passkey creation cancelled.', true); return; }
+    if (!credential) { setStatus('authStatus', 'Passkey creation cancelled.', true); return; }
 
     await api.verifyPasskeyRegistration(credToJson(credential));
-    setStatus('Passkey added! Redirecting…');
+    setStatus('authStatus', 'Passkey added! Redirecting…');
     setTimeout(() => { location.href = returnUrl(); }, 800);
   } catch (e) {
     if (e?.name === 'NotAllowedError') {
-      setStatus('Passkey creation was cancelled.', true);
+      setStatus('authStatus', 'Passkey creation was cancelled.', true);
     } else if (e?.name === 'SecurityError') {
-      setStatus(INSECURE_MSG, true);
+      setStatus('authStatus', INSECURE_MSG, true);
     } else if (e?.status) {
-      setStatus(`Passkey error: ${e.message}`, true);
+      setStatus('authStatus', `Passkey error: ${e.message}`, true);
     } else {
-      setStatus(`Passkey creation failed: ${e?.message || e}`, true);
+      setStatus('authStatus', `Passkey creation failed: ${e?.message || e}`, true);
     }
   }
 }
@@ -266,7 +227,7 @@ async function boot() {
     } else if (!secureContextOk() && typeof PublicKeyCredential !== 'undefined') {
       // The device supports passkeys but this origin can't use them — tell the
       // player why the passkey button is missing instead of leaving them stuck.
-      setStatus(INSECURE_MSG, true);
+      setStatus('authStatus', INSECURE_MSG, true);
     }
   }
 
