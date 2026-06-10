@@ -161,30 +161,9 @@ async function loadGrid() {
   renderGrid();
 }
 
-// Colour palette matching FACE_AXES order (0=white … 5=green).
-const COLOR_META = [
-  { label: "white",  hex: "#d0d4de", dark: true  },
-  { label: "yellow", hex: "#ffd23f", dark: true  },
-  { label: "red",    hex: "#e5484d", dark: false },
-  { label: "orange", hex: "#ff7a1a", dark: false },
-  { label: "blue",   hex: "#3aa0ff", dark: false },
-  { label: "green",  hex: "#3ecf6b", dark: true  },
-];
-
-function colorCell(colorBeams, i) {
-  const cm = COLOR_META[i];
-  const v = colorBeams ? colorBeams[i] : null;
-  if (v == null) {
-    return `<td class="cb-cell"><span class="cb-chip cb-unsolved" title="beam not run for ${cm.label}">–</span></td>`;
-  }
-  const txtClass = cm.dark ? "cb-dark" : "cb-light";
-  return `<td class="cb-cell"><span class="cb-chip ${txtClass}" style="background:${cm.hex}" title="beam moves — ${cm.label} target">${v}</span></td>`;
-}
-
 // One puzzle list row.
 function rowHtml(p) {
   const solved = p.yourBest != null;
-  const colorCells = COLOR_META.map((_, i) => colorCell(p.colorBeams, i)).join("");
   return (
     `<tr class="puzzle-row${solved ? " solved" : ""}" data-name="${esc(p.name)}" tabindex="0">` +
     `<td class="pl-dot-cell"><span class="row-dot${solved ? " row-dot-solved" : ""}" title="${solved ? "solved" : "unsolved"}"></span></td>` +
@@ -194,8 +173,7 @@ function rowHtml(p) {
     `<td class="pl-num-cell">${p.minBeamWidth != null ? `<span class="effort-val">w${p.minBeamWidth}</span>` : `<span class="muted">–</span>`}</td>` +
     `<td class="pl-num-cell">${p.attempts ? pct(p.failRate) : `<span class="muted">–</span>`}</td>` +
     `<td class="pl-num-cell">${dash(p.worldBest)}</td>` +
-    `<td class="pl-num-cell">${dash(p.yourBest)}</td>` +
-    colorCells +
+    `<td class="pl-num-cell">${p.yourBest != null ? p.yourBest : `<span class="muted">–</span>`}</td>` +
     `<td class="pl-act-cell">` +
       `<span class="play-hint">Play ▸</span>` +
       `<button class="lb-btn link-btn" type="button" data-name="${esc(p.name)}">Scores</button>` +
@@ -203,11 +181,6 @@ function rowHtml(p) {
     `</tr>`
   );
 }
-
-const COLOR_HEADS = COLOR_META.map(
-  (cm) => `<th class="cb-cell" title="beam moves — ${cm.label} target">` +
-    `<span class="cb-header-dot" style="background:${cm.hex}"></span></th>`
-).join("");
 
 function tableHtml(items) {
   return (
@@ -222,7 +195,6 @@ function tableHtml(items) {
     `<th class="pl-num-col">Fail&nbsp;%</th>` +
     `<th class="pl-num-col">World</th>` +
     `<th class="pl-num-col">You</th>` +
-    COLOR_HEADS +
     `<th class="pl-act-col"></th>` +
     `</tr></thead>` +
     `<tbody>${items.map(rowHtml).join("")}</tbody>` +
