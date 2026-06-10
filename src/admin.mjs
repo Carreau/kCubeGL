@@ -428,8 +428,10 @@ async function runSolver(ids) {
         p.colorBeams = r.colorBeams ?? null;
         p.solvedAt = r.solvedAt;
       }
-    } catch {
+    } catch (e) {
       failed++;
+      const puzzleName = p ? p.name : id;
+      console.error(`[kcube] failed to solve puzzle ${puzzleName}:`, e);
     }
     done++;
     renderPuzzles(); // show each result as it lands, not only at the end
