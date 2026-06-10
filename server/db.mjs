@@ -125,6 +125,7 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
     }
   };
   addColumn("puzzles", "color_beams", "TEXT");
+  addColumn("attempts", "win_color", "INTEGER"); // colour (0-5) a won attempt left on top
   addColumn("users", "password_hash", "TEXT");
   addColumn("webauthn_challenges", "type", "TEXT");
   // One-time migration: DBs written before tokens were hashed at rest hold the
@@ -446,13 +447,13 @@ export class Db {
 
   // Finalise the caller's own in-progress attempt. Returns true if a row was
   // updated (false if it wasn't theirs / already closed).
-  finishAttempt(id, userId, { outcome, movesUsed, durationMs, moveSeq }) {
+  finishAttempt(id, userId, { outcome, movesUsed, durationMs, moveSeq, winColor }) {
     const r = this.db
       .prepare(
-        "UPDATE attempts SET outcome = ?, moves_used = ?, duration_ms = ?, move_seq = ?, ended_at = ? " +
+        "UPDATE attempts SET outcome = ?, moves_used = ?, duration_ms = ?, move_seq = ?, win_color = ?, ended_at = ? " +
         "WHERE id = ? AND user_id = ? AND outcome = 'in_progress'"
       )
-      .run(outcome, movesUsed ?? null, durationMs ?? null, moveSeq ?? null, now(), id, userId);
+      .run(outcome, movesUsed ?? null, durationMs ?? null, moveSeq ?? null, winColor ?? null, now(), id, userId);
     return r.changes > 0;
   }
 
@@ -613,11 +614,25 @@ export class Db {
     const bestStmt = userId
       ? this.db.prepare("SELECT MIN(moves_used) AS best FROM attempts WHERE user_id = ? AND puzzle_id = ? AND outcome = 'won'")
       : null;
+    // The caller's fewest moves per winning top colour (0-5), so the landing
+    // page can show a breakdown across the six colours a board can be solved to.
+    const colorStmt = userId
+      ? this.db.prepare(
+          "SELECT win_color, MIN(moves_used) AS best FROM attempts " +
+          "WHERE user_id = ? AND puzzle_id = ? AND outcome = 'won' AND win_color IS NOT NULL " +
+          "GROUP BY win_color")
+      : null;
 
     return rows.map((r) => {
       const attempts = r.attempts || 0;
       const winRate = attempts ? (r.win_attempts || 0) / attempts : 0;
       const yourBest = bestStmt ? (bestStmt.get(userId, r.id).best ?? null) : null;
+      let yourBestByColor = null;
+      if (colorStmt) {
+        const byColor = {};
+        for (const cr of colorStmt.all(userId, r.id)) byColor[cr.win_color] = cr.best;
+        if (Object.keys(byColor).length) yourBestByColor = byColor;
+      }
       return {
         id: r.id,
         name: r.name,
@@ -629,6 +644,7 @@ export class Db {
         pinned: r.pinned === 1,
         sortOrder: r.sort_order,
         yourBest,
+        yourBestByColor,
         worldBest: r.world_best ?? null,
         solvers: r.solvers || 0,
         attempts,

@@ -40,10 +40,11 @@ const CODE_TO_DIR = { R: "ArrowRight", L: "ArrowLeft", U: "ArrowUp", D: "ArrowDo
 // cursor rides the rolled cube). The game never records a press toward an
 // off-board cell, so one in the sequence means it cannot be a real recording.
 //
-// Returns { rolls, won } — the paid roll count and whether the final position
-// is solved (every top the same colour, one connected block) — or null if the
-// sequence is impossible. This is the server's ground truth for win claims:
-// a submission is only as good as a sequence that actually replays to a win.
+// Returns { rolls, won, color } — the paid roll count, whether the final
+// position is solved (every top the same colour, one connected block), and the
+// colour left on top by a win (faces[2] is the top face; null when not won) —
+// or null if the sequence is impossible. This is the server's ground truth for
+// win claims: a submission is only as good as a sequence that replays to a win.
 export function replayMoves(config, moveSeq) {
   let { state } = buildCatalogState(config);
   let rolls = 0;
@@ -61,7 +62,9 @@ export function replayMoves(config, moveSeq) {
       rolls++;
     }
   }
-  return { rolls, won: isWon(state) };
+  const won = isWon(state);
+  const color = won && state.cubes.length ? state.cubes[0].faces[2] : null;
+  return { rolls, won, color };
 }
 
 const DIR_TO_CODE = Object.fromEntries(Object.entries(CODE_TO_DIR).map(([c, d]) => [d, c]));

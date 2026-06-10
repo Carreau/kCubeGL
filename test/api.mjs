@@ -231,6 +231,13 @@ try {
   eq(p0row.yourBest, S0, "authed catalogue shows yourBest S0");
   eq(p0row.worldBest, S0, "authed catalogue shows worldBest S0");
   eq(p0row.solvers, 2, "P0 has 2 solvers");
+  // Per-colour bests: alice's P0 wins both solve to the stored solution's top
+  // colour, so yourBestByColor holds exactly that one colour, valued at S0.
+  const p0color = replayMoves({ seed: R0.seed, numCubes: R0.numCubes, scramble: R0.scramble }, solutionFor(R0).codes).color;
+  ok(p0color != null && p0color >= 0 && p0color < 6, "a verified win reports a valid top colour");
+  ok(p0row.yourBestByColor && p0row.yourBestByColor[p0color] === S0, "yourBestByColor records the solved colour at S0");
+  eq(Object.keys(p0row.yourBestByColor).length, 1, "only the solved colour appears in yourBestByColor");
+  eq(cat[0].yourBestByColor ?? null, null, "yourBestByColor is null when unauthenticated");
 
   // move-sequence recording: the player's cursor path round-trips into the row,
   // and any non-R/L/U/D characters are stripped server-side before storage

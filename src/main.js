@@ -238,7 +238,10 @@ function bestFor(name) {
   return b && b[name] !== undefined ? b[name] : null;
 }
 // Record a clear: keep the fewest moves ever used to solve this puzzle (by name).
-function recordScore(name, movesUsed) {
+// winColor (0-5) is the colour left on top by this win; we also track the best
+// per colour so the landing page can break a puzzle down across the six colours
+// it can be solved to. Passing null skips the per-colour update.
+function recordScore(name, movesUsed, winColor) {
   const s = loadStore();
   s.best = s.best || {};
   s.cleared = s.cleared || {};
@@ -246,6 +249,12 @@ function recordScore(name, movesUsed) {
   const isRecord = prev === undefined || movesUsed < prev;
   if (isRecord) s.best[name] = movesUsed;
   s.cleared[name] = (s.cleared[name] || 0) + 1;
+  if (winColor != null) {
+    s.bestByColor = s.bestByColor || {};
+    const byColor = (s.bestByColor[name] = s.bestByColor[name] || {});
+    const prevC = byColor[winColor];
+    if (prevC === undefined || movesUsed < prevC) byColor[winColor] = movesUsed;
+  }
   saveStore(s);
   return { isRecord, best: s.best[name], prev };
 }
@@ -684,7 +693,9 @@ function afterMove() {
     game.state = "won";
     game.bonus += 1; // clearing a puzzle grants +1 carried move
     finalizeAttempt("won"); // close the attempt as a win (records moves + time + path)
-    const { isRecord, best, prev } = recordScore(game.puzzleName, game.movesUsed);
+    // All cubes share one top colour now (that's the win); record the best for it.
+    const winColorAchieved = game.cubes[0].topColor;
+    const { isRecord, best, prev } = recordScore(game.puzzleName, game.movesUsed, winColorAchieved);
     const scoreLine = isRecord
       ? (prev === undefined
           ? `Solved in <b>${game.movesUsed}</b> moves.`
