@@ -91,14 +91,23 @@ const cellZ = (row) => (row - (BOARD - 1) / 2) * S;
 // Ease-in-out (smooth start and stop) for roll and cursor-walk animations.
 const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 
-// Build a canvas texture: a coloured rounded square on a dark background, so
+// Per-theme scene colours. The board stays a neutral tone (never hinting at the
+// target colour); the face-texture background is the seam colour between cubes.
+const SCENE_THEME = {
+  dark:  { clear: 0x0b0d14, base: 0x161a26, tileA: 0x2a3145, tileB: 0x222838, faceBg: "#0c0e16" },
+  // faceBg stays a medium slate (not near-white) so the white cube face keeps a
+  // visible rounded border instead of dissolving into a pale seam.
+  light: { clear: 0xc6d4e8, base: 0xd2dcec, tileA: 0xe6edf7, tileB: 0xd8e2f0, faceBg: "#8b97ad" },
+};
+
+// Build a canvas texture: a coloured rounded square on a themed background, so
 // faces read clearly and adjacent cubes still show a seam between them.
-function faceTexture(hex) {
+function faceTexture(hex, bg = SCENE_THEME.dark.faceBg) {
   const size = 128;
   const cv = document.createElement("canvas");
   cv.width = cv.height = size;
   const ctx = cv.getContext("2d");
-  ctx.fillStyle = "#0c0e16";
+  ctx.fillStyle = bg;
   ctx.fillRect(0, 0, size, size);
   const pad = 12, r = 22, w = size - pad * 2;
   const col = "#" + hex.toString(16).padStart(6, "0");
@@ -121,9 +130,11 @@ function faceTexture(hex) {
 }
 
 // BoxGeometry material order is: +X, -X, +Y, -Y, +Z, -Z — matching FACE_AXES.
+// All cubes share this material array, so rebuilding each map on a theme change
+// (see applySceneTheme) recolours every cube's face seams at once.
 const FACE_MATERIALS = FACE_AXES.map(
   (f) => new THREE.MeshStandardMaterial({
-    map: faceTexture(COLORS[f.color].hex),
+    map: faceTexture(COLORS[f.color].hex, SCENE_THEME[initTheme()].faceBg),
     roughness: 0.55,
     metalness: 0.05,
   })
@@ -203,12 +214,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-const CLEAR_DARK = 0x0b0d14;
-const CLEAR_LIGHT = 0xc6d4e8;
-renderer.setClearColor(initTheme() === 'light' ? CLEAR_LIGHT : CLEAR_DARK);
-document.addEventListener('themechange', ({ detail }) => {
-  renderer.setClearColor(detail.theme === 'light' ? CLEAR_LIGHT : CLEAR_DARK);
-});
+renderer.setClearColor(SCENE_THEME[initTheme()].clear);
 
 const scene = new THREE.Scene();
 
@@ -247,27 +253,48 @@ const boardGroup = new THREE.Group();
 scene.add(boardGroup);
 
 const baseGeo = new THREE.BoxGeometry(BOARD * S + 0.5, 0.4, BOARD * S + 0.5);
-const baseMat = new THREE.MeshStandardMaterial({ color: 0x161a26, roughness: 0.9 });
+const baseMat = new THREE.MeshStandardMaterial({ color: SCENE_THEME[initTheme()].base, roughness: 0.9 });
 const base = new THREE.Mesh(baseGeo, baseMat);
 base.position.y = -0.2 - 0.001;
 base.receiveShadow = true;
 boardGroup.add(base);
 
 const tileGeo = new THREE.BoxGeometry(S * 0.94, 0.12, S * 0.94);
-const tileMats = [];
-for (let r = 0; r < BOARD; r++) {
-  for (let c = 0; c < BOARD; c++) {
-    const mat = new THREE.MeshStandardMaterial({
-      color: (r + c) % 2 ? 0x222838 : 0x2a3145,
-      roughness: 0.85,
-    });
-    const tile = new THREE.Mesh(tileGeo, mat);
-    tile.position.set(cellX(c), -0.06, cellZ(r));
-    tile.receiveShadow = true;
-    boardGroup.add(tile);
-    tileMats.push(mat);
+const tileMats = []; // [{ mat, dark }] — `dark` marks the checker parity so a
+                     // theme swap can pick the matching tone from SCENE_THEME.
+{
+  const t = SCENE_THEME[initTheme()];
+  for (let r = 0; r < BOARD; r++) {
+    for (let c = 0; c < BOARD; c++) {
+      const dark = (r + c) % 2 === 1;
+      const mat = new THREE.MeshStandardMaterial({
+        color: dark ? t.tileB : t.tileA,
+        roughness: 0.85,
+      });
+      const tile = new THREE.Mesh(tileGeo, mat);
+      tile.position.set(cellX(c), -0.06, cellZ(r));
+      tile.receiveShadow = true;
+      boardGroup.add(tile);
+      tileMats.push({ mat, dark });
+    }
   }
 }
+
+// Recolour the renderer background, board, tiles, and every cube's face seams
+// for the given theme. Cube face maps are rebuilt (the old textures disposed).
+function applySceneTheme(theme) {
+  const t = SCENE_THEME[theme] || SCENE_THEME.dark;
+  renderer.setClearColor(t.clear);
+  baseMat.color.set(t.base);
+  for (const { mat, dark } of tileMats) mat.color.set(dark ? t.tileB : t.tileA);
+  FACE_AXES.forEach((f, i) => {
+    const mat = FACE_MATERIALS[i];
+    mat.map?.dispose();
+    mat.map = faceTexture(COLORS[f.color].hex, t.faceBg);
+    mat.needsUpdate = true;
+  });
+}
+document.addEventListener('themechange', ({ detail }) => applySceneTheme(detail.theme));
 
 // Asymmetric tetrahedron cursor: tip starts pointing toward world -Z (= "north").
 // rotation.y snaps to the same 90° grid as the arrow-key remapping so the tip
