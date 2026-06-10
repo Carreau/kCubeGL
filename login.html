@@ -24,7 +24,26 @@
       <!-- Passkey login — shown only when platform authenticator is available -->
       <div id="passkeyLoginArea" class="hidden">
         <button id="passkeyLoginBtn" class="primary passkey-btn" type="button">Sign in with Passkey</button>
-        <div class="auth-divider"><span>or register a new account</span></div>
+        <div class="auth-divider"><span>or sign in with password</span></div>
+      </div>
+
+      <!-- Password login — shown when the server is reachable -->
+      <div id="passwordLoginArea" class="hidden">
+        <form id="passwordLoginForm">
+          <div class="field">
+            <label for="loginUsernameInput">Username</label>
+            <input id="loginUsernameInput" type="text" placeholder="your username"
+              maxlength="24" autocomplete="username" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="loginPasswordInput">Password</label>
+            <input id="loginPasswordInput" type="password" placeholder="your password"
+              autocomplete="current-password" />
+          </div>
+          <button type="submit" class="primary" id="passwordLoginBtn">Sign In</button>
+          <p id="loginErr" class="auth-err hidden"></p>
+        </form>
+        <div class="auth-divider"><span>or create a new account</span></div>
       </div>
 
       <!-- Register form -->
@@ -33,6 +52,11 @@
           <label for="usernameInput">Username</label>
           <input id="usernameInput" type="text" placeholder="pick a name (1–24 chars)"
             maxlength="24" autocomplete="username" autocorrect="off" autocapitalize="off" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label for="regPasswordInput">Password <span class="muted">(optional, ≥ 8 chars)</span></label>
+          <input id="regPasswordInput" type="password" placeholder="leave blank for passkey-only"
+            autocomplete="new-password" />
         </div>
         <!-- Admin setup: hidden by default, toggled via link below -->
         <div id="adminTokenArea" class="hidden">

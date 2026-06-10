@@ -47,8 +47,10 @@ async function loadUsers() {
       <td>${fmtDate(u.createdAt)}</td>
       <td class="admin-cell">${u.isAdmin ? '<span class="admin-badge">admin</span>' : '–'}</td>
       <td>${u.passkeyCount}</td>
+      <td>${u.hasPassword ? '<span class="pw-badge">pw</span>' : '–'}</td>
       <td class="actions-cell">
         ${!isSelf ? `<button class="link-btn toggle-admin-btn" data-uid="${u.id}" data-admin="${u.isAdmin ? '1' : '0'}" type="button">${u.isAdmin ? 'Remove admin' : 'Make admin'}</button>` : ''}
+        ${!isSelf ? `<button class="link-btn reset-pw-btn" data-uid="${u.id}" data-name="${esc(u.username)}" data-haspw="${u.hasPassword ? '1' : '0'}" type="button">Reset password</button>` : ''}
         ${!isSelf ? `<button class="link-btn danger-btn delete-btn" data-uid="${u.id}" data-name="${esc(u.username)}" type="button">Delete</button>` : ''}
       </td>
     </tr>`;
@@ -56,7 +58,7 @@ async function loadUsers() {
 
   wrap.innerHTML =
     `<table class="admin-table">
-      <thead><tr><th>ID</th><th>Username</th><th>Joined</th><th>Role</th><th>Passkeys</th><th>Actions</th></tr></thead>
+      <thead><tr><th>ID</th><th>Username</th><th>Joined</th><th>Role</th><th>Passkeys</th><th>Password</th><th>Actions</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 
@@ -66,6 +68,26 @@ async function loadUsers() {
       const makeAdmin = btn.dataset.admin === '0';
       try {
         await api.adminUpdateUser(uid, { isAdmin: makeAdmin });
+        await loadUsers();
+      } catch (e) {
+        alert(`Failed: ${e.message}`);
+      }
+    });
+  });
+
+  wrap.querySelectorAll('.reset-pw-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const uid = Number(btn.dataset.uid);
+      const hasPw = btn.dataset.haspw === '1';
+      const prompt = hasPw
+        ? `New password for @${btn.dataset.name} (leave blank to clear existing password):`
+        : `Set a password for @${btn.dataset.name} (minimum 8 characters):`;
+      const newPw = window.prompt(prompt, '');
+      if (newPw === null) return; // cancelled
+      if (newPw && newPw.length < 8) { alert('Password must be at least 8 characters.'); return; }
+      try {
+        const result = await api.adminResetUserPassword(uid, newPw || null);
+        alert(result?.hasPassword ? 'Password updated.' : 'Password cleared.');
         await loadUsers();
       } catch (e) {
         alert(`Failed: ${e.message}`);

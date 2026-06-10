@@ -808,6 +808,14 @@ body.auth-page {
   font-size: 11px;
   margin-left: 4px;
 }
+.pw-badge {
+  background: var(--ok-bg);
+  border: 1px solid var(--ok-bd);
+  color: var(--ok-ink);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
 .danger-btn { color: var(--err-ink) !important; border-color: var(--err-bd) !important; margin-left: 6px; }
 .danger-btn:hover { border-color: var(--err-bd-hv) !important; background: var(--err-bg-hv) !important; }
 .actions-cell { white-space: nowrap; }
