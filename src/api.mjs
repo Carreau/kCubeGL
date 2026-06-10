@@ -33,6 +33,12 @@ export class ApiError extends Error {
 // Core request. Returns parsed JSON, or throws ApiError(status) on an HTTP
 // error, or throws a plain Error on a network failure (caller decides whether
 // to swallow it).
+// Resilience only holds if failures are FAST: a server that accepts the TCP
+// connection but never answers (overloaded proxy, half-dead container) would
+// otherwise hang every await forever and the cold-start fallback would never
+// be reached. 10s is generous for a JSON API on the same origin.
+const TIMEOUT_MS = 10_000;
+
 async function request(method, path, body, { keepalive = false } = {}) {
   const headers = {};
   const token = getToken();
@@ -43,6 +49,7 @@ async function request(method, path, body, { keepalive = false } = {}) {
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     keepalive,
+    signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(TIMEOUT_MS) : undefined,
   });
   const text = await res.text();
   let data = null;

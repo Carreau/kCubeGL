@@ -170,6 +170,15 @@ export class Db {
     this.db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, userId);
   }
 
+  // Mint a fresh bearer token for a user, invalidating the old one. Used when
+  // an admin resets a password: without rotation, a leaked token would survive
+  // the reset and keep full account access indefinitely.
+  rotateToken(userId) {
+    const token = randomBytes(24).toString("base64url");
+    this.db.prepare("UPDATE users SET token = ? WHERE id = ?").run(token, userId);
+    return token;
+  }
+
   userByToken(token) {
     if (!token) return null;
     const row = this.db.prepare("SELECT id, username, is_admin, avatar_hash FROM users WHERE token = ?").get(token);

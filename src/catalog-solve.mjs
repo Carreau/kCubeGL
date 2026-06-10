@@ -39,7 +39,12 @@ export function buildCatalogState(config) {
 //                   the widest beam tried found nothing.
 export function solveCatalogPuzzle(config, opts = {}) {
   const { state, solutionLen } = buildCatalogState(config);
-  const bfs = bfsSolve(state, opts.bfs);
+  // BFS never needs to search deeper than the stored solution length (a valid
+  // solve of exactly that length always exists), but it stays capped at 20:
+  // catalogue scrambles go up to 30 and an exhaustive depth-30 BFS can blow up
+  // in time/memory. So `bfs` (and the persisted full_optimal) is null BY DESIGN
+  // on deep boards — the beam result is the difficulty signal there.
+  const bfs = bfsSolve(state, opts.bfs ?? { maxDepth: Math.min(solutionLen, 20) });
   const beam = beamSolve(state, opts.beam);
   const effort = minBeamWidthToSolve(state, opts.effort);
 

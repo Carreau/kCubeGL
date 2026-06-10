@@ -46,12 +46,25 @@ try {
   // health
   eq((await call("GET", "/health")).body.ok, true, "health ok");
 
+  // Malformed / oversized request bodies are the client's fault, not a 500 or
+  // a bare connection reset.
+  const badJson = await fetch(api + "/users", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: '{"username":',
+  });
+  eq(badJson.status, 400, "malformed JSON body → 400");
+  const hugeBody = await fetch(api + "/users", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "x".repeat(80_000) }),
+  }).catch(() => null);
+  ok(hugeBody && hugeBody.status === 413, "oversized body → 413");
+
   // catalogue (unauth): a fixed pool of named puzzles with metadata, no best.
   const cat = (await call("GET", "/puzzles")).body;
   ok(Array.isArray(cat) && cat.length >= 40, "catalogue has the full pool");
   ok(cat.every((p) => typeof p.name === "string" && p.par > 0), "every puzzle has a name + par");
   ok(cat.every((p) => "fullOptimal" in p && "beamMoves" in p && "minBeamWidth" in p && "solvedAt" in p), "every puzzle carries solver difficulty fields");
   ok(cat.every((p) => p.solvedAt == null), "solver values unset until the solver is run");
+  ok(cat.every((p) => p.optimal === p.scramble), "optimal is seeded from the scramble length");
   eq(cat[0].yourBest, null, "yourBest null when unauth");
   const P0 = cat[0].name, P1 = cat[1].name, P2 = cat[2].name, P3 = cat[3].name;
 
@@ -64,6 +77,10 @@ try {
   const tokenA = a.body.token;
   eq((await call("POST", "/users", { body: { username: "Alice" } })).status, 409, "duplicate name → 409");
   eq((await call("POST", "/users", { body: { username: "  " } })).status, 400, "blank name → 400");
+  // Control / bidi-override characters spoof whatever renders around them
+  // (leaderboards, admin lists) — rejected outright.
+  eq((await call("POST", "/users", { body: { username: "evil\u202ename" } })).status, 400, "bidi override in name → 400");
+  eq((await call("POST", "/users", { body: { username: "tab\tname" } })).status, 400, "control char in name → 400");
   // A plain registration (no/incorrect secret) is never admin.
   const plain = await call("POST", "/users", { body: { username: "carol", adminToken: "wrong" } });
   ok(!plain.body.isAdmin, "wrong bootstrap secret → not admin");
@@ -138,6 +155,16 @@ try {
   const poison2 = await call("POST", "/attempts", { token: tokenB, body: { puzzle: P0, optimal: 100000 } });
   await call("PATCH", `/attempts/${poison2.body.attemptId}`, { token: tokenB, body: { outcome: "abandoned", movesUsed: 0, durationMs: 0 } });
   eq((await call("GET", `/puzzles/${P0}`)).body.optimal, optBefore, "optimal above par is ignored too");
+  // The client-supplied optimal channel is gone entirely: even a "plausible"
+  // claimed value on POST /attempts must not move the stored optimal.
+  const fresh = cat.find((p) => p.scramble >= 10 && ![P0, P1, P2, P3].includes(p.name));
+  eq((await call("GET", `/puzzles/${fresh.name}`)).body.optimal, fresh.scramble, "untouched puzzle: optimal = scramble");
+  const claim = await call("POST", "/attempts", { token: tokenB, body: { puzzle: fresh.name, optimal: 1 } });
+  await call("PATCH", `/attempts/${claim.body.attemptId}`, { token: tokenB, body: { outcome: "abandoned", movesUsed: 0, durationMs: 0 } });
+  eq((await call("GET", `/puzzles/${fresh.name}`)).body.optimal, fresh.scramble, "claimed optimal:1 on attempt start is ignored");
+  // …but a validated WIN does lower it.
+  await win(tokenB, fresh.name, 3, 1000);
+  eq((await call("GET", `/puzzles/${fresh.name}`)).body.optimal, 3, "a validated win lowers the stored optimal");
 
   // puzzle detail: leaderboard order + difficulty stats
   const d = (await call("GET", `/puzzles/${P0}`, { token: tokenA })).body;
@@ -242,7 +269,11 @@ try {
   eq(resetRes.status, 200, "admin reset password → 200");
   ok(resetRes.body.hasPassword, "reset returns hasPassword = true");
   eq((await call("POST", "/auth/password/login", { body: { username: "frank", password: "correct-horse" } })).status, 401, "old password no longer works");
-  eq((await call("POST", "/auth/password/login", { body: { username: "frank", password: "new-password-123" } })).status, 200, "new password works");
+  // The bearer token rotates with the reset: a leaked token must not survive it.
+  eq((await call("GET", "/me", { token: tokenF })).status, 401, "old bearer token revoked by password reset");
+  const relogin = await call("POST", "/auth/password/login", { body: { username: "frank", password: "new-password-123" } });
+  eq(relogin.status, 200, "new password works");
+  ok(relogin.body.token && relogin.body.token !== tokenF, "login after reset returns a fresh token");
   // Clear the password.
   const clearRes = await call("POST", `/admin/users/${frankId}/reset-password`, { token: tokenA, body: { newPassword: null } });
   eq(clearRes.status, 200, "admin clear password → 200");

@@ -9,6 +9,7 @@ import {
   DIRS as GEN_DIRS, FACE_AXES as GEN_FACE_AXES,
 } from "./level-gen.mjs";
 import * as api from "./api.mjs";
+import { esc } from "./ui.mjs";
 import { bfsSolve, greedySolve } from "./solver.mjs";
 import { initTheme, setupTheme } from "./theme.mjs";
 
@@ -600,7 +601,7 @@ function afterMove() {
     const hasNext = nextPuzzleName() != null;
     showOverlay(
       "Solved!",
-      `${scoreLine}<br><b>${game.puzzleName}</b> cleared. <b>+1</b> bonus move banked (carried: ${game.bonus}).`,
+      `${scoreLine}<br><b>${esc(game.puzzleName)}</b> cleared. <b>+1</b> bonus move banked (carried: ${game.bonus}).`,
       hasNext ? "Next puzzle" : "Back to puzzles"
     );
     updateHud();
@@ -1071,8 +1072,12 @@ async function loadOrder() {
 // with ?puzzle=NAME. Read that name (default: the first puzzle in order), show
 // who's playing, and drop the player onto the board. "Puzzles" / M returns to it.
 async function boot() {
-  const saved = localStorage.getItem("kcube.winColor");
-  game.winColor = saved !== null && saved !== "-1" ? Number(saved) : null;
+  // A tampered/stale value (e.g. "abc" → NaN, or an out-of-range index) would
+  // crash the colour picker and make the board silently unwinnable, so only a
+  // valid COLORS index survives the round-trip; anything else means "any colour".
+  const raw = localStorage.getItem("kcube.winColor");
+  const saved = raw === null ? NaN : Number(raw);
+  game.winColor = Number.isInteger(saved) && saved >= 0 && saved < COLORS.length ? saved : null;
   refreshIdentity();
   await loadOrder();
   const wanted = new URLSearchParams(location.search).get("puzzle");

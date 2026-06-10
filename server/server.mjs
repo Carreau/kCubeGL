@@ -48,23 +48,44 @@ const BLOCKED = ["/server", "/.git", "/node_modules"];
 
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj);
-  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "X-Content-Type-Options": "nosniff",
+  });
   res.end(body);
 }
 
+// An error the top-level catch maps to a specific HTTP status (client fault),
+// as opposed to an unexpected failure (500 + a logged stack).
+function httpError(status, message) {
+  const e = new Error(message);
+  e.httpStatus = status;
+  return e;
+}
+
 // Read and JSON-parse a request body (cap size to avoid abuse). Returns {} for
-// an empty body; throws on malformed JSON.
+// an empty body; rejects with a 400/413 httpError on malformed/oversized input
+// so the client gets a real status instead of a 500 or a connection reset.
 function readJson(req, limit = 1 << 16) {
   return new Promise((resolve, reject) => {
     let data = "", size = 0;
-    req.on("data", (c) => {
+    const onData = (c) => {
       size += c.length;
-      if (size > limit) { reject(new Error("payload too large")); req.destroy(); return; }
+      if (size > limit) {
+        // Stop reading (backpressure via pause) but keep the socket alive so
+        // the 413 can reach the client; the catch handler closes it after.
+        req.off("data", onData);
+        req.pause();
+        reject(httpError(413, "payload too large"));
+        return;
+      }
       data += c;
-    });
+    };
+    req.on("data", onData);
     req.on("end", () => {
       if (!data) return resolve({});
-      try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+      try { resolve(JSON.parse(data)); }
+      catch { reject(httpError(400, "malformed JSON body")); }
     });
     req.on("error", reject);
   });
@@ -204,13 +225,22 @@ function rateLimited(bucket, ip, max) {
 
 const SOLVE_WORKER_URL = new URL("./solve-worker.mjs", import.meta.url);
 
+// Hard ceiling on one solve run. Without it a pathological board would leave
+// the worker thread burning a CPU core forever (the promise just never
+// settles), and repeated admin calls could stack such threads up.
+const SOLVE_TIMEOUT_MS = 5 * 60_000;
+
 function runSolverWorker(config) {
   return new Promise((resolve, reject) => {
     // execArgv: [] — don't inherit parent CLI flags (e.g. --input-type/--eval
     // flags from an embedding process), which can break module workers.
     const w = new Worker(SOLVE_WORKER_URL, { workerData: config, execArgv: [] });
     let settled = false;
-    const settle = (fn, v) => { if (!settled) { settled = true; fn(v); } };
+    const settle = (fn, v) => { if (!settled) { settled = true; clearTimeout(timer); fn(v); } };
+    const timer = setTimeout(() => {
+      settle(reject, new Error("solver timed out"));
+      w.terminate();
+    }, SOLVE_TIMEOUT_MS);
     w.once("message", (r) => settle(resolve, r));
     w.once("error", (e) => settle(reject, e));
     w.once("exit", (code) => settle(reject, new Error(`solver worker exited with code ${code}`)));
@@ -234,7 +264,10 @@ async function serveStatic(req, res, pathname) {
   }
   try {
     const body = await readFile(full);
-    res.writeHead(200, { "Content-Type": MIME[extname(full)] || "application/octet-stream" });
+    res.writeHead(200, {
+      "Content-Type": MIME[extname(full)] || "application/octet-stream",
+      "X-Content-Type-Options": "nosniff",
+    });
     res.end(body);
   } catch {
     res.writeHead(404); res.end("not found");
@@ -304,6 +337,12 @@ const ROUTES = [
       if (username.length < 1 || username.length > 24) {
         return sendJson(res, 400, { error: "name must be 1–24 characters" });
       }
+      // Usernames appear on shared surfaces (leaderboards, admin lists): reject
+      // control characters and bidi overrides, which exist only to spoof or
+      // mangle whatever is rendered around them.
+      if (/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(username)) {
+        return sendJson(res, 400, { error: "name contains invalid characters" });
+      }
       const email = cleanEmail(body.email);
       if (email === undefined) return sendJson(res, 400, { error: "invalid email" });
       const password = typeof body.password === "string" ? body.password : null;
@@ -371,7 +410,8 @@ const ROUTES = [
   // register a token, so that let any visitor permanently poison a puzzle's
   // shortest-known-solve. `optimal` is now seeded from the generator's solution
   // length and only ever lowered by validated wins (see the PATCH handler).
-  { method: "POST", path: "/api/attempts", auth: "user", body: true, handler({ res, db, body, user }) {
+  { method: "POST", path: "/api/attempts", auth: "user", body: true, limit: { bucket: "attempts", max: 60 },
+    handler({ res, db, body, user }) {
     const name = cleanName(body.puzzle);
     if (!name) return sendJson(res, 400, { error: "bad puzzle" });
     const puzzle = db.puzzleByName(name);
@@ -380,7 +420,8 @@ const ROUTES = [
   } },
 
   // PATCH /api/attempts/:id  { outcome, movesUsed, durationMs }
-  { method: "PATCH", path: "/api/attempts/:id", auth: "user", body: true, handler({ res, db, params, body, user }) {
+  { method: "PATCH", path: "/api/attempts/:id", auth: "user", body: true, limit: { bucket: "attempts", max: 60 },
+    handler({ res, db, params, body, user }) {
     const id = toInt(params.id);
     if (!id || !VALID_OUTCOME.has(body.outcome)) {
       return sendJson(res, 400, { error: "bad attempt update" });
@@ -389,8 +430,12 @@ const ROUTES = [
     const row = db.openAttempt(id, user.id);
     if (!row) return sendJson(res, 404, { error: "no such open attempt" });
     const puzzleId = row.puzzle_id;
-    const movesUsed = Math.max(0, toInt(body.movesUsed) ?? 0);
-    const durationMs = Math.max(0, toInt(body.durationMs) ?? 0);
+    // Clamp into sane ranges: moveSeq is capped at 4096 rolls, and no attempt
+    // plausibly runs a week — uncapped values would let one bogus submission
+    // skew the avgMoves/avgDuration difficulty aggregates arbitrarily.
+    const MAX_MOVES = 4096, MAX_DURATION_MS = 7 * 24 * 3600 * 1000;
+    const movesUsed = Math.min(MAX_MOVES, Math.max(0, toInt(body.movesUsed) ?? 0));
+    const durationMs = Math.min(MAX_DURATION_MS, Math.max(0, toInt(body.durationMs) ?? 0));
     // Player's recorded cursor path (R/L/U/D). Keep only the four codes and cap
     // the length so a stray/oversized payload can't bloat the row.
     const moveSeq = typeof body.moveSeq === "string"
@@ -430,7 +475,8 @@ const ROUTES = [
 
   // POST /api/attempts/:id/abandon  { token, movesUsed, durationMs }  (beacon)
   // No auth guard: sendBeacon can't set headers, so the token rides in the body.
-  { method: "POST", path: "/api/attempts/:id/abandon", body: true, handler({ req, res, db, params, body }) {
+  { method: "POST", path: "/api/attempts/:id/abandon", body: true, limit: { bucket: "attempts", max: 60 },
+    handler({ req, res, db, params, body }) {
     const id = toInt(params.id);
     const u = db.userByToken(body.token || bearer(req));
     if (u && id) {
@@ -578,6 +624,10 @@ const ROUTES = [
         ? await hashPassword(newPassword)
         : null;
       db.setUserPassword(targetId, passwordHash);
+      // A password reset usually means "lock the old credentials out", so the
+      // bearer token rotates with it — otherwise a leaked token would survive
+      // the reset. The user signs back in with the new password.
+      db.rotateToken(targetId);
       return sendJson(res, 200, { ok: true, hasPassword: !!passwordHash });
     } },
 
@@ -652,10 +702,14 @@ export function startServer({ dbPath, port = 8080, host = "127.0.0.1" } = {}) {
       }
     } catch (e) {
       const badRequest = e instanceof URIError || (e && e.code === "ERR_INVALID_URL");
+      const status = (e && e.httpStatus) || (badRequest ? 400 : 500);
       if (!res.headersSent) {
-        sendJson(res, badRequest ? 400 : 500, { error: badRequest ? "bad request" : "server error" });
+        sendJson(res, status, { error: e && e.httpStatus ? e.message : (status === 500 ? "server error" : "bad request") });
       }
-      if (!badRequest) console.error("[kcube]", e && e.stack ? e.stack : e);
+      // An oversized body leaves unread data on the wire: close the connection
+      // once the 413 has flushed rather than letting the client keep streaming.
+      if (status === 413) res.once("finish", () => req.destroy());
+      if (status === 500) console.error("[kcube]", e && e.stack ? e.stack : e);
     }
   });
   return new Promise((resolve, reject) => {
