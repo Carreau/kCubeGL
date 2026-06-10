@@ -65,23 +65,67 @@ async function loadUsers() {
     });
   });
 
+  // Inline password-reset form (never window.prompt — that would echo the new
+  // password as cleartext). Built via DOM so the username needs no escaping.
   wrap.querySelectorAll('.reset-pw-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', () => {
+      const open = wrap.querySelector('.pw-reset-row');
+      if (open) {
+        const wasMine = open.dataset.uid === btn.dataset.uid;
+        open.remove();
+        if (wasMine) return; // second click toggles the form closed
+      }
       const uid = Number(btn.dataset.uid);
       const hasPw = btn.dataset.haspw === '1';
-      const prompt = hasPw
-        ? `New password for @${btn.dataset.name} (leave blank to clear existing password):`
-        : `Set a password for @${btn.dataset.name} (minimum 8 characters):`;
-      const newPw = window.prompt(prompt, '');
-      if (newPw === null) return; // cancelled
-      if (newPw && newPw.length < 8) { alert('Password must be at least 8 characters.'); return; }
-      try {
-        const result = await api.adminResetUserPassword(uid, newPw || null);
-        alert(result?.hasPassword ? 'Password updated.' : 'Password cleared.');
-        await loadUsers();
-      } catch (e) {
-        alert(`Failed: ${e.message}`);
-      }
+
+      const tr = document.createElement('tr');
+      tr.className = 'pw-reset-row';
+      tr.dataset.uid = btn.dataset.uid;
+      const td = document.createElement('td');
+      td.colSpan = 7;
+
+      const form = document.createElement('form');
+      form.className = 'pw-reset-form';
+      const label = document.createElement('label');
+      label.textContent = hasPw
+        ? `New password for @${btn.dataset.name} (blank clears it):`
+        : `Set a password for @${btn.dataset.name} (min 8 chars):`;
+      const input = document.createElement('input');
+      input.type = 'password';
+      input.autocomplete = 'new-password';
+      input.placeholder = hasPw ? 'leave blank to clear' : 'minimum 8 characters';
+      label.append(input);
+      const save = document.createElement('button');
+      save.type = 'submit';
+      save.className = 'primary';
+      save.textContent = 'Save';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'link-btn';
+      cancel.textContent = 'Cancel';
+      cancel.addEventListener('click', () => tr.remove());
+      const msg = document.createElement('span');
+      msg.className = 'auth-err';
+      form.append(label, save, cancel, msg);
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const newPw = input.value;
+        if (newPw && newPw.length < 8) { msg.textContent = 'Password must be at least 8 characters.'; return; }
+        save.disabled = true;
+        try {
+          await api.adminResetUserPassword(uid, newPw || null);
+          await loadUsers(); // re-render reflects the new pw badge
+        } catch (err) {
+          msg.textContent = `Failed: ${err.message}`;
+          save.disabled = false;
+        }
+      });
+
+      td.append(form);
+      tr.append(td);
+      btn.closest('tr').after(tr);
+      input.focus();
     });
   });
 
@@ -317,7 +361,17 @@ function renderPuzzles() {
     try {
       await api.adminReorderPuzzles(featured);
       await loadPuzzles();
-      $('puzzleSaveMsg').textContent = 'Saved.';
+      // loadPuzzles re-rendered the section; if the reload failed there is no
+      // puzzleSaveMsg element any more, so don't throw on a detached node.
+      const after = $('puzzleSaveMsg');
+      if (after) {
+        after.textContent = 'Saved.';
+      } else {
+        const note = document.createElement('p');
+        note.className = 'muted';
+        note.textContent = 'Saved, but reload failed — refresh to see the new order.';
+        $('puzzleAdminWrap').prepend(note);
+      }
     } catch (e) {
       msg.textContent = `Failed: ${e.message}`;
     }
@@ -365,10 +419,11 @@ async function runSolver(ids) {
   if (solverRunning || !ids.length) return;
   solverRunning = true;
   renderPuzzles();
-  const status = $('solverStatus');
   let done = 0, failed = 0;
   for (const id of ids) {
     const p = byId(id);
+    // renderPuzzles() replaces the DOM each iteration, so re-look-up the status node.
+    const status = $('solverStatus');
     if (status) status.textContent = `Solving ${p ? p.name : id}… (${done}/${ids.length})`;
     try {
       const r = await api.adminSolvePuzzle(id);
@@ -383,6 +438,7 @@ async function runSolver(ids) {
       failed++;
     }
     done++;
+    renderPuzzles(); // show each result as it lands, not only at the end
   }
   solverRunning = false;
   renderPuzzles();

@@ -9,29 +9,36 @@
  *   4 = +Z (front), 5 = -Z (back)
  * faces[2] is therefore always the top colour.
  *
- * Colour ids match FACE_AXES in main.js: 0=white, 1=yellow, 2=red,
+ * Colour ids match FACE_AXES in level-gen.mjs: 0=white, 1=yellow, 2=red,
  * 3=orange, 4=blue, 5=green.
  *
  * Roll permutations: new_faces[i] = old_faces[PERM[i]]
- * Derived from the world-space 90° premultiply rotations used in main.js:
- *   ArrowRight → R_z(−90°): left→top, top→right, right→bottom, bottom→left
- *   ArrowLeft  → R_z(+90°): right→top, top→left, left→bottom, bottom→right
- *   ArrowUp    → R_x(−90°): front→top, top→back, back→bottom, bottom→front
- *   ArrowDown  → R_x(+90°): back→top, top→front, front→bottom, bottom→back
+ * Derived AT MODULE INIT from the same quaternion roll math the game uses
+ * (level-gen.mjs DIRS + qAxisAngle/qMul/quatToFaces), so the solver's face
+ * permutations can never drift from the real tip-over rotations. A roll is a
+ * world-space premultiplied 90° rotation, so the resulting face permutation is
+ * the same for every cube orientation — deriving it once from the identity
+ * orientation is sufficient.
  * =========================================================================== */
 
 import { BOARD, NEI, OPPOSITE, inBounds } from "./shared.mjs";
+import { DIRS as GEN_DIRS, qAxisAngle, qMul, quatToFaces } from "./level-gen.mjs";
 
-const DIRS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
+const DIRS = Object.keys(GEN_DIRS); // ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"]
 
-const ROLL_PERM = {
-  ArrowRight: [2, 3, 1, 0, 4, 5],
-  ArrowLeft:  [3, 2, 0, 1, 4, 5],
-  ArrowUp:    [0, 1, 4, 5, 3, 2],
-  ArrowDown:  [0, 1, 5, 4, 2, 3],
-};
-const ROLL_DR = { ArrowRight: 0,  ArrowLeft:  0,  ArrowUp: -1, ArrowDown: 1  };
-const ROLL_DC = { ArrowRight: 1,  ArrowLeft: -1,  ArrowUp:  0, ArrowDown: 0  };
+const ROLL_PERM = {};
+const ROLL_DR = {};
+const ROLL_DC = {};
+{
+  const IDENTITY = [0, 0, 0, 1];
+  const idFaces = quatToFaces(IDENTITY); // 6 distinct colour ids, one per slot
+  for (const [key, d] of Object.entries(GEN_DIRS)) {
+    const rolledFaces = quatToFaces(qMul(qAxisAngle(d.axis, d.angle), IDENTITY));
+    ROLL_PERM[key] = rolledFaces.map((color) => idFaces.indexOf(color));
+    ROLL_DR[key] = d.dr;
+    ROLL_DC[key] = d.dc;
+  }
+}
 
 /* --- Low-level helpers ------------------------------------------------------- */
 
@@ -101,12 +108,15 @@ function stateKey(state) {
 // Returns [{id, dir}, …] (optimal roll sequence) or null if no solution was
 // found within the budget.  Parent-pointer reconstruction avoids O(depth) array
 // copies on every expansion.
-export function bfsSolve(initialState, { maxDepth = 20, maxNodes = 60000 } = {}) {
-  if (isWon(initialState)) return [];
+export function bfsSolve(initialState, { maxDepth = 20, maxNodes = 60000, targetColor = null } = {}) {
+  if (isWon(initialState, targetColor)) return [];
 
   // Each queue entry: { state, parentIdx, move }
   const queue = [{ state: initialState, parentIdx: -1, move: null }];
   const seen = new Set([stateKey(initialState)]);
+  // maxNodes bounds EXPANSIONS; also cap raw queue growth (each expansion can
+  // enqueue many children) so memory stays bounded on wide boards.
+  const maxQueue = maxNodes * 8;
 
   for (let qi = 0; qi < queue.length && qi < maxNodes; qi++) {
     const { state, parentIdx: pi } = queue[qi];
@@ -126,10 +136,12 @@ export function bfsSolve(initialState, { maxDepth = 20, maxNodes = 60000 } = {})
         if (seen.has(key)) continue;
         seen.add(key);
 
+        if (queue.length >= maxQueue) return null; // budget blown — bail out
+
         const idx = queue.length;
         queue.push({ state: ns, parentIdx: qi, move: { id: cube.id, dir } });
 
-        if (isWon(ns)) {
+        if (isWon(ns, targetColor)) {
           // Reconstruct path from parent pointers.
           const path = [];
           for (let k = idx; queue[k].parentIdx !== -1; k = queue[k].parentIdx)

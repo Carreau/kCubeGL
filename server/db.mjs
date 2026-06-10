@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS passkeys (
 CREATE TABLE IF NOT EXISTS webauthn_challenges (
   challenge   TEXT PRIMARY KEY,
   user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  expires_at  INTEGER NOT NULL
+  expires_at  INTEGER NOT NULL,
+  type        TEXT                          -- challenge purpose: 'register' | 'login'
 );
 
 -- Puzzle content + identity. The id is the opaque key everything references;
@@ -113,6 +114,7 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   };
   addColumn("puzzles", "color_beams", "TEXT");
   addColumn("users", "password_hash", "TEXT");
+  addColumn("webauthn_challenges", "type", "TEXT");
   const wrapped = new Db(db);
   wrapped.seedCatalog();
   return wrapped;
@@ -199,25 +201,31 @@ export class Db {
   }
 
   updatePasskeyCounter(credentialId, counter) {
-    this.db.prepare("UPDATE passkeys SET counter = ? WHERE credential_id = ?").run(counter, credentialId);
+    // Never lower the stored counter: an authenticator reporting signCount 0
+    // (some don't implement counters) must not erase a positive counter and
+    // thereby disable clone detection.
+    this.db.prepare("UPDATE passkeys SET counter = MAX(counter, ?) WHERE credential_id = ?").run(counter, credentialId);
   }
 
   /* --- webauthn challenges ---------------------------------------------------- */
 
-  saveChallenge(challenge, userId = null) {
+  saveChallenge(challenge, userId = null, type = null) {
     // Opportunistically sweep expired challenges so abandoned ones don't pile up.
     this.db.prepare("DELETE FROM webauthn_challenges WHERE expires_at < ?").run(Date.now());
     const expiresAt = Date.now() + 5 * 60 * 1000;
     this.db.prepare(
-      "INSERT OR REPLACE INTO webauthn_challenges (challenge, user_id, expires_at) VALUES (?, ?, ?)"
-    ).run(challenge, userId, expiresAt);
+      "INSERT OR REPLACE INTO webauthn_challenges (challenge, user_id, expires_at, type) VALUES (?, ?, ?, ?)"
+    ).run(challenge, userId, expiresAt, type);
   }
 
-  consumeChallenge(challenge) {
+  // Consume (delete) a challenge and return it, or null when it's unknown,
+  // expired, or was issued for a different purpose ('register' vs 'login').
+  consumeChallenge(challenge, type = null) {
     const row = this.db.prepare("SELECT * FROM webauthn_challenges WHERE challenge = ?").get(challenge);
     if (!row) return null;
     this.db.prepare("DELETE FROM webauthn_challenges WHERE challenge = ?").run(challenge);
     if (row.expires_at < Date.now()) return null;
+    if (type !== null && row.type !== type) return null;
     return row;
   }
 
@@ -285,9 +293,13 @@ export class Db {
     return this._puzzleMeta(this.puzzleByName(name));
   }
 
-  // Record a better optimal (shortest known solve) for a puzzle.
+  // Record a better optimal (shortest known solve) for a puzzle. The value is
+  // client-supplied, so it is also sanity-checked here: it must be a positive
+  // integer no greater than the puzzle's par, or it is silently ignored.
   recordOptimal(puzzleId, optimal) {
-    if (optimal == null) return;
+    if (!Number.isInteger(optimal) || optimal < 1) return;
+    const row = this.puzzleById(puzzleId);
+    if (!row || optimal > row.par) return;
     this.db.prepare(
       "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
     ).run(optimal, puzzleId, optimal);
@@ -306,13 +318,18 @@ export class Db {
     const r = solveCatalogPuzzle({
       seed: row.seed, numCubes: row.num_cubes, scramble: row.scramble,
     });
+    return this.saveSolveResult(puzzleId, r);
+  }
+
+  // Persist an already-computed solver result (e.g. from a worker thread).
+  saveSolveResult(puzzleId, r) {
     const ts = now();
     this.db.prepare(
       "UPDATE puzzles SET full_optimal = ?, beam_moves = ?, min_beam_width = ?, color_beams = ?, solved_at = ? WHERE id = ?"
-    ).run(r.bfs ?? null, r.beam ?? null, r.searchWidth ?? null, JSON.stringify(r.colorBeams), ts, puzzleId);
+    ).run(r.bfs ?? null, r.beam ?? null, r.searchWidth ?? null, JSON.stringify(r.colorBeams) ?? null, ts, puzzleId);
     return {
       fullOptimal: r.bfs ?? null, beamMoves: r.beam ?? null,
-      minBeamWidth: r.searchWidth ?? null, colorBeams: r.colorBeams, solvedAt: ts,
+      minBeamWidth: r.searchWidth ?? null, colorBeams: r.colorBeams ?? null, solvedAt: ts,
     };
   }
 

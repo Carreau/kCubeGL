@@ -16,7 +16,7 @@ jobs:
           persist-credentials: false
 
       - name: Install zizmor
-        run: pip install zizmor
+        run: pip install zizmor==1.9.0
 
       - name: Run zizmor
         run: zizmor .github/workflows/

@@ -43,13 +43,13 @@ export const DIRS = {
 
 /* --- minimal quaternion math, stored as [x, y, z, w] (Three.js conventions) - */
 
-function qAxisAngle(axis, angle) {
+export function qAxisAngle(axis, angle) {
   const h = angle / 2, s = Math.sin(h);
   return [axis[0] * s, axis[1] * s, axis[2] * s, Math.cos(h)];
 }
 
 // a * b (Three.js multiplyQuaternions).
-function qMul(a, b) {
+export function qMul(a, b) {
   const [ax, ay, az, aw] = a, [bx, by, bz, bw] = b;
   return [
     ax * bw + aw * bx + ay * bz - az * by,
@@ -265,15 +265,21 @@ export function generateLevel(config) {
     applied++;
   }
 
-  // If luck produced an already-solved board, nudge once more from the cursor's
-  // island so the extra move stays cursor-reachable.
-  if (isSolved(cubes)) {
+  // If luck produced an already-solved board, nudge from the cursor's island so
+  // the extra move stays cursor-reachable — and RE-CHECK: a single nudge can
+  // leave the board solved (e.g. a one-cube board is uniform whatever its top),
+  // so loop with a small guard rather than nudging blindly once.
+  for (let nudges = 0; isSolved(cubes) && nudges < 8; nudges++) {
     const prev = scrambleMoves[scrambleMoves.length - 1];
+    let rolled = null;
     for (const cube of shuffle(islandOf(cubes, cursorCube), rng)) {
       const forbid = prev && prev.cube === cube ? OPPOSITE[prev.key] : null;
       const k = scrambleRoll(cubes, cube, rng, forbid);
-      if (k) { scrambleMoves.push({ cube, key: k }); break; }
+      if (k) { rolled = { cube, key: k }; break; }
     }
+    if (!rolled) break; // island boxed in — nothing more we can do
+    scrambleMoves.push(rolled);
+    cursorCube = rolled.cube;
   }
 
   // The game starts the cursor on the last-scrambled cube (solution[0].cube).

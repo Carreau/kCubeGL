@@ -44,7 +44,15 @@ async function request(method, path, body) {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  if (text) {
+    try { data = JSON.parse(text); }
+    catch {
+      // Non-JSON body (e.g. a proxy's HTML error page): synthesize an error
+      // that still carries the HTTP status instead of a bare SyntaxError.
+      throw new ApiError(res.status, res.statusText || `HTTP ${res.status}`);
+    }
+  }
   if (!res.ok) throw new ApiError(res.status, (data && data.error) || res.statusText);
   return data;
 }
@@ -150,8 +158,12 @@ export function getPasskeyLoginOptions() {
   return tryReq('POST', '/auth/passkey/login/options');
 }
 
+// Verify a passkey assertion. Stores the returned token on success, like
+// createUser/passwordLogin.
 export async function verifyPasskeyLogin(assertion) {
-  return request('POST', '/auth/passkey/login/verify', { assertion });
+  const data = await request('POST', '/auth/passkey/login/verify', { assertion });
+  if (data && data.token) setToken(data.token);
+  return data;
 }
 
 /* --- Admin ------------------------------------------------------------------ */

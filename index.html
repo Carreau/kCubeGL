@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-VofFY8klmktlclSOfMSg5hON4BMwUzcczVmt1A9sGLY='; style-src 'self' 'unsafe-inline'; img-src 'self' https://www.gravatar.com data:; connect-src 'self'" />
   <title>kCube — levels</title>
   <link rel="stylesheet" href="src/styles.css" />
   <script>(function(){var t=localStorage.getItem('kcube.theme')||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');document.documentElement.setAttribute('data-theme',t);})()</script>
@@ -42,16 +43,17 @@
       <div class="levels-head">
         <h2>Puzzles</h2>
         <div class="sort-bar" id="sortBar" role="group" aria-label="Sort puzzles">
-          <button class="sort-chip active" data-sort="featured">★ Featured</button>
-          <button class="sort-chip" data-sort="fail">Fail rate <span class="sort-dir">↓</span></button>
-          <button class="sort-chip" data-sort="over">Moves gap <span class="sort-dir">↓</span></button>
-          <button class="sort-chip" data-sort="effort">Effort <span class="sort-dir">↓</span></button>
-          <button class="sort-chip" data-sort="scramble">Scramble <span class="sort-dir">↓</span></button>
-          <button class="sort-chip" data-sort="cubes">Cubes <span class="sort-dir">↓</span></button>
-          <button class="sort-chip" data-sort="name">Name <span class="sort-dir">↑</span></button>
+          <button type="button" class="sort-chip active" data-sort="featured" aria-pressed="true">★ Featured</button>
+          <button type="button" class="sort-chip" data-sort="fail" aria-pressed="false">Fail rate <span class="sort-dir">↓</span></button>
+          <button type="button" class="sort-chip" data-sort="over" aria-pressed="false">Moves gap <span class="sort-dir">↓</span></button>
+          <button type="button" class="sort-chip" data-sort="effort" aria-pressed="false">Effort <span class="sort-dir">↓</span></button>
+          <button type="button" class="sort-chip" data-sort="scramble" aria-pressed="false">Scramble <span class="sort-dir">↓</span></button>
+          <button type="button" class="sort-chip" data-sort="cubes" aria-pressed="false">Cubes <span class="sort-dir">↓</span></button>
+          <button type="button" class="sort-chip" data-sort="name" aria-pressed="false">Name <span class="sort-dir">↑</span></button>
         </div>
       </div>
-      <div id="grid" class="grid" aria-live="polite"></div>
+      <p id="gridStatus" class="muted grid-status" role="status" aria-live="polite"></p>
+      <div id="grid" class="grid"></div>
     </section>
   </main>
 

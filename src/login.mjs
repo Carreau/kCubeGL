@@ -1,6 +1,6 @@
 import * as api from './api.mjs';
 import { setupTheme } from './theme.mjs';
-import { $ } from './ui.mjs';
+import { $, setStatus as showStatus } from './ui.mjs';
 
 /* --- base64url <-> ArrayBuffer helpers -------------------------------------- */
 
@@ -40,14 +40,14 @@ function credToJson(cred) {
 
 function returnUrl() {
   const p = new URLSearchParams(location.search).get('return');
-  return (p && p.startsWith('/')) ? p : 'index.html';
+  // Same-origin paths only: must start with '/' but not '//' or '/\', both of
+  // which browsers treat as protocol-relative URLs (an open-redirect vector).
+  return (p && p.startsWith('/') && !p.startsWith('//') && !p.startsWith('/\\'))
+    ? p : 'index.html';
 }
 
 function setStatus(msg, isErr = false) {
-  const el = $('authStatus');
-  el.textContent = msg;
-  el.className = 'auth-status' + (isErr ? ' auth-err' : '');
-  el.classList.remove('hidden');
+  showStatus($('authStatus'), msg, isErr);
 }
 
 function clearStatus() { $('authStatus').classList.add('hidden'); }
@@ -62,6 +62,10 @@ function secureContextOk() {
     ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 }
 
+// Whether THIS device has a platform authenticator — used only for the
+// post-registration "Add Passkey" nudge. The sign-in button is shown more
+// broadly (see boot): roaming/cross-device passkeys (security keys, phone
+// hybrid) work without a platform authenticator.
 async function passkeyAvailable() {
   if (!secureContextOk()) return false;
   if (typeof PublicKeyCredential === 'undefined') return false;
@@ -96,7 +100,7 @@ async function doPasskeyLogin() {
     const result = await api.verifyPasskeyLogin(credToJson(assertion));
     if (!result?.token) { setStatus('Passkey verification failed.', true); return; }
 
-    api.setToken(result.token);
+    // api.verifyPasskeyLogin stored the token (like createUser/passwordLogin).
     location.href = returnUrl();
   } catch (e) {
     let msg;
@@ -180,6 +184,9 @@ async function doRegister(e) {
     // can actually work; on a dev server without a secure context we'd just be
     // dangling a button that throws, so continue straight into the session.
     $('registerForm').classList.add('hidden');
+    $('passwordLoginArea').classList.add('hidden');
+    $('passkeyLoginArea').classList.add('hidden');
+    $('adminToggleArea').classList.add('hidden');
     if (await passkeyAvailable()) {
       $('addPasskeyArea').classList.remove('hidden');
     } else {
@@ -250,7 +257,10 @@ async function boot() {
     $('passwordLoginArea').classList.remove('hidden');
     $('passwordLoginForm').addEventListener('submit', doPasswordLogin);
 
-    if (await passkeyAvailable()) {
+    // Offer passkey sign-in whenever the browser supports WebAuthn in a secure
+    // context — roaming authenticators (security keys, phone hybrid) work even
+    // without a platform authenticator on this device.
+    if (secureContextOk() && typeof PublicKeyCredential !== 'undefined') {
       $('passkeyLoginArea').classList.remove('hidden');
       $('passkeyLoginBtn').addEventListener('click', doPasskeyLogin);
     } else if (!secureContextOk() && typeof PublicKeyCredential !== 'undefined') {

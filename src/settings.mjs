@@ -1,24 +1,16 @@
 import * as api from './api.mjs';
-import { gravatarUrl, gravatarUrlForHash } from './shared.mjs';
 import { setupTheme } from './theme.mjs';
-import { $, esc } from './ui.mjs';
+import { $, esc, avatarHtml, setStatus } from './ui.mjs';
 
 function setMsg(text, isErr = false) {
-  const el = $('formMsg');
-  el.textContent = text;
-  el.className = 'auth-status' + (isErr ? ' auth-err' : '');
-  el.classList.remove('hidden');
+  setStatus($('formMsg'), text, isErr);
 }
 
 function renderAvatar(user) {
   const box = $('avatarPreview');
   if (!user) { box.innerHTML = ''; return; }
-  const src = user.avatarHash
-    ? gravatarUrlForHash(user.avatarHash, { size: 128 })
-    : gravatarUrl(user.username, { size: 128 });
   box.innerHTML =
-    `<img class="settings-avatar" src="${esc(src)}" alt="Your avatar" width="64" height="64" ` +
-    `referrerpolicy="no-referrer" onerror="this.style.display='none'">` +
+    avatarHtml(user, 64, 'settings-avatar') +
     `<span class="settings-avatar-name">@${esc(user.username)}</span>`;
   box.classList.remove('hidden');
 }

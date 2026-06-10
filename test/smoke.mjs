@@ -14,16 +14,19 @@ const { chromium } = pw;
 const fail = (msg) => { console.error("✗ " + msg); process.exitCode = 1; };
 
 const { url, db, close } = await startServer({ dbPath: ":memory:", port: 0 });
-const browser = await chromium.launch({ args: ["--enable-unsafe-swiftshader"] });
-const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 900, height: 700 } });
-const page = await ctx.newPage();
+let browser; // launched inside the try so a launch failure still closes the server
 
 const errors = [];
-page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
-page.on("console", (m) => { if (m.type() === "error") errors.push("console.error: " + m.text()); });
-page.on("requestfailed", (r) => errors.push(`requestfailed: ${r.url()} ${r.failure()?.errorText || ""}`));
 
 try {
+  browser = await chromium.launch({ args: ["--enable-unsafe-swiftshader"] });
+  const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 900, height: 700 } });
+  const page = await ctx.newPage();
+
+  page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
+  page.on("console", (m) => { if (m.type() === "error") errors.push("console.error: " + m.text()); });
+  page.on("requestfailed", (r) => errors.push(`requestfailed: ${r.url()} ${r.failure()?.errorText || ""}`));
+
   // --- Landing page: grid renders, and we can sign in. ---
   await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
   await page.waitForSelector(".card", { timeout: 15000 });
@@ -47,7 +50,14 @@ try {
   const firstName = await page.$eval(".card", (e) => e.getAttribute("data-name"));
   await page.click(`.card[data-name="${firstName}"]`);
   await page.waitForURL(/play\.html\?puzzle=/, { timeout: 10000 });
-  await page.waitForTimeout(1500); // game init + Three.js from CDN
+  // Wait on a real readiness signal instead of a fixed sleep: the moves HUD
+  // starts at "0" in the HTML and is set to the level's move budget (> 0) once
+  // the game has initialised (Three.js loaded, board generated, HUD updated).
+  await page.waitForFunction(
+    () => Number(document.getElementById("moves")?.textContent) > 0,
+    undefined,
+    { timeout: 30000 },
+  );
 
   // Open info panel to access cube count
   await page.click("#infoBtn");
@@ -82,7 +92,7 @@ try {
 } catch (e) {
   fail("threw: " + (e && e.stack ? e.stack : e));
 } finally {
-  await browser.close();
+  await browser?.close();
   close();
 }
 
