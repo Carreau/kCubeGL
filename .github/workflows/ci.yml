@@ -1,8 +1,10 @@
 name: CI
 
+# push is limited to main so PR branches don't run the suite twice
+# (once for push, once for pull_request).
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 jobs:

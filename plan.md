@@ -8,18 +8,18 @@ Project status, scope, and future considerations for kCubeGL.
 - ✅ 5×5 board, bevelled dice, arrow-key cursor with 4-direction rolling
 - ✅ Animated tip-over (true 3D quaternion rotations)
 - ✅ Guaranteed-solvable level generation (reverse-scrambling)
-- ✅ **Deterministic levels** — generation is seeded by the level number, so level N is the same puzzle for everyone (basis for fair leaderboards)
+- ✅ **Deterministic puzzles** — a fixed, named catalogue (~40 puzzles) derived from one master seed; each board is seeded by its puzzle's own seed, so a given puzzle is the same board for everyone (basis for fair leaderboards). No level numbers anywhere.
 - ✅ Contiguous-block win condition (connectivity + same color)
 - ✅ Move budget economy + carried move bonus
 - ✅ Q/E view rotation, solution playback
 - ✅ Best-score persistence (localStorage) — works with no backend
 - ✅ Win/lose flow
-- ✅ **Real landing page** (`index.html`) — level grid with your best / world best, sign-in, per-level leaderboard + difficulty detail; game lives at `play.html?level=N`
+- ✅ **Real landing page** (`index.html`) — puzzle grid with your best / world best, sign-in, per-puzzle leaderboard + difficulty detail; game lives at `play.html?puzzle=<name>`
 - ✅ **SQLite backend** (`node:sqlite`, no native deps) — `server/server.mjs` serves the game + a JSON API
 - ✅ **Username accounts** (bearer-token; optional password login, plus passkeys)
-- ✅ **Leaderboards** (fewest moves per level, tie-broken by time)
+- ✅ **Leaderboards** (fewest moves per puzzle, tie-broken by time)
 - ✅ **Per-attempt tracking** (won / lost / abandoned, moves, duration) → puzzle-difficulty and player-skill aggregates
-- ✅ Tests: API integration (`test/api.mjs`) + headless browser smoke (`test/smoke.mjs`)
+- ✅ Tests: unit (`test/unit.mjs`: catalogue determinism, engine, solvers) + API integration (`test/api.mjs`) + headless browser smoke (`test/smoke.mjs`)
 
 ### Deliberately Out of Scope
 - ❌ **Self-serve account recovery** — passwords and passkeys exist, but a lost token with no password/passkey set still means asking an admin (password reset) or picking a new name
@@ -31,7 +31,7 @@ Project status, scope, and future considerations for kCubeGL.
 ## Known Limitations
 
 1. **Move Budget Calculation**: Simple heuristic; the backend now collects the attempt/move data needed to refine it from measured difficulty
-2. **Random Scrambling**: Naive random reverse-rolls (now seeded/deterministic per level); no explicit difficulty targeting yet
+2. **Random Scrambling**: Naive random reverse-rolls (seeded/deterministic per puzzle); no explicit difficulty targeting yet
 3. **View Rotation**: Continuous (Q/E hold), not snapped; can be disorienting
 4. **Cube Selection**: Cursor can only move between physically adjacent cubes
 5. **Account Recovery**: A lost token (cleared localStorage) is only recoverable if a password or passkey was set; otherwise an admin reset or a new name
@@ -211,11 +211,10 @@ which reproduces the exact board without Three.js and runs the pure solvers in
 
 3. **Undo/Redo** — Requires full move history and rollback logic; consider an immutable board representation or move-replay approach
 
-4. **Testing** — Current smoke test only covers happy path; unit tests for:
-   - Quaternion rotation correctness
-   - Win condition detection
-   - Move budget calculations
-   - Level generation distribution
+4. **Testing** — `test/unit.mjs` now covers quaternion/roll correctness, win
+   detection, budget math and catalogue determinism (with full-catalogue
+   solvability replay); remaining gaps are the WebAuthn verify ceremonies and
+   the rate limiter (both exercised only manually today)
 
 ### Performance Notes
 - **Rendering** is GPU-bound (WebGL); CPU usage is minimal even with 25 cubes
@@ -226,15 +225,19 @@ which reproduces the exact board without Three.js and runs the pure solvers in
 ## Testing Strategy
 
 ### Current
-- Smoke test (npm test) catches import errors, WebGL failures, and runtime exceptions
+- Unit tests (`npm run test:unit`) cover board logic, quaternion/roll edge
+  cases, win/connectivity detection, budget math and catalogue determinism —
+  including replaying every catalogue puzzle's stored solution to a solved state
+- API integration test (`npm run test:api`) drives the backend over fetch,
+  including adversarial cases (poisoned values, cross-user finalisation)
+- Smoke test (`npm run test:smoke`) catches import errors, WebGL failures, and runtime exceptions
 - Manual testing recommended for:
   - Level difficulty balance (move budgets)
-  - Quaternion edge cases (corner cases in roll logic)
-  - Win condition detection (especially connectivity checks)
+  - Passkey (WebAuthn) register/login ceremonies
 
 ### Future
-- Unit tests for board logic (separated from rendering)
-- Property-based tests for level solvability (generate 1000+ levels, verify all can reach solved state)
+- Headless WebAuthn ceremony tests (Playwright virtual authenticator)
+- Rate-limiter coverage (tests currently disable it via KCUBE_RATE_LIMIT=0)
 - Accessibility audit (WCAG 2.1 AA)
 - Cross-browser testing (Chrome, Firefox, Safari, Edge)
 

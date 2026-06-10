@@ -22,14 +22,15 @@ Key features:
 npm start              # Full app + API + SQLite on http://localhost:8080 (server/server.mjs)
 npm run dev            # Static-only server (no backend; cold-start cache + localStorage): Python HTTP server on port 8080
 npm run check          # Syntax-check all source + server files
-npm test               # API integration test + headless browser smoke test
+npm test               # Unit + API integration + headless browser smoke tests
+npm run test:unit      # Pure-logic unit tests (catalogue determinism, engine, solvers)
 npm run test:api       # Backend API test only (no browser; fast)
 npm run test:smoke     # Headless Playwright end-to-end test only
 ```
 
 **Requires Node ≥ 22.5** for the backend (built-in `node:sqlite`; also declared in `package.json` `engines`). Today there is no build step: ES modules are served directly, Three.js loads from a CDN at runtime, and the server runs on Node built-ins — but this is a convenience, not a hard rule, and npm dependencies or a build step are acceptable (see Important Constraints). The DB file `server/kcube.sqlite` is created on first run (gitignored). Set `KCUBE_DB=:memory:` for an ephemeral DB (the tests do this).
 
-**Auth & deploy env vars:** `KCUBE_ADMIN_TOKEN` (a bootstrap secret) is the only way to mint an admin — `POST /api/users` grants admin only when its `adminToken` field matches it; if unset, no new admins can be created via the API. `KCUBE_TRUST_PROXY=1` (or `true`) tells the server to trust `X-Forwarded-Host`/`X-Forwarded-Proto` (used to derive the WebAuthn origin/RP-ID); set it behind a TLS-terminating reverse proxy or passkeys/origins will be wrong.
+**Auth & deploy env vars:** `KCUBE_ADMIN_TOKEN` (a bootstrap secret) is the only way to mint an admin — `POST /api/users` grants admin only when its `adminToken` field matches it; if unset, no new admins can be created via the API. `KCUBE_TRUST_PROXY=1` (or `true`) tells the server to trust `X-Forwarded-Host`/`X-Forwarded-Proto` (used to derive the WebAuthn origin/RP-ID); set it behind a TLS-terminating reverse proxy or passkeys/origins will be wrong (it also makes rate limiting key on the last `X-Forwarded-For` entry — the one the trusted proxy appended). `KCUBE_RATE_LIMIT` overrides the per-minute cap for every rate-limit bucket (0 disables limiting; the tests set this).
 
 ## Codebase Structure
 
@@ -60,6 +61,7 @@ npm run test:smoke     # Headless Playwright end-to-end test only
 - **server/password.mjs** — Password hashing with `node:crypto` scrypt. Stores self-describing `scrypt:N:r:p:salt:hash` strings; verification is constant-time and never throws.
 
 **Testing:**
+- **test/unit.mjs** — Pure-logic tests (no server, no browser): catalogue determinism snapshots (with full-catalogue solvability replay), engine/quaternion behaviour and solver invariants.
 - **test/api.mjs** — Boots the server against an in-memory DB and drives the API with `fetch` (no browser). The fast, primary backend test.
 - **test/smoke.mjs** — Boots the real server + a headless browser: landing → sign in → play → solution playback; asserts an attempt was recorded and that nothing logged a console/page/network error.
 
