@@ -347,6 +347,7 @@ const game = {
   puzzleConfig: null,
   // Backend attempt tracking (resilient — null/0 while the server is unreachable).
   attemptId: null, // id of the in-progress attempt on the server
+  attemptGen: 0, // bumped per beginAttempt so late responses for an old board are ignored
   attemptStart: 0, // performance.now() when the attempt began (for duration)
   username: null, // logged-in player name, if any (shown in the HUD)
 };
@@ -455,6 +456,7 @@ function buildLevel(config) {
   game.solving = false;
   game.solveQueue = [];
   game.walk = null;
+  game.anim = null; // kill any in-flight roll so it can't land on the fresh board
 
   updateCursor(true);
   updateHud();
@@ -643,10 +645,16 @@ function tryImproveWithSolver() {
   if (!game.initial.length) return;
   const solverState = extractInitialSolverState();
 
-  const bfs = bfsSolve(solverState);
-  if (bfs && bfs.length <= game.solution.length) {
-    game.solution = solverSolutionToGame(bfs);
-    return;
+  // BFS explores at most BFS_MAX_DEPTH moves: when the stored solution is
+  // already longer, BFS provably cannot improve on it — and on hard boards it
+  // would freeze the UI for seconds before returning null. Skip it entirely.
+  const BFS_MAX_DEPTH = 20;
+  if (game.solution.length <= BFS_MAX_DEPTH) {
+    const bfs = bfsSolve(solverState, { maxDepth: BFS_MAX_DEPTH, targetColor: game.winColor });
+    if (bfs && bfs.length <= game.solution.length) {
+      game.solution = solverSolutionToGame(bfs);
+      return;
+    }
   }
 
   const greedy = greedySolve(solverState);
@@ -667,6 +675,9 @@ function showSolution() {
   if (game.anim || game.solving) return;
   if (game.state !== "playing" && game.state !== "lost") return;
   if (game.solution.length === 0) return;
+  // Watching the solution forfeits the run: close the open attempt as abandoned
+  // (lost/won states have already been finalised; finalizeAttempt no-ops then).
+  if (game.state === "playing") finalizeAttempt("abandoned");
   tryImproveWithSolver(); // replace game.solution if BFS/greedy finds a shorter path
   hideOverlay();
   restoreInitial(); // rewind to the scrambled start
@@ -806,15 +817,32 @@ async function refreshIdentity() {
 function beginAttempt(puzzleInfo = null) {
   game.attemptStart = performance.now();
   game.attemptId = null;
+  // Staleness guard: if the player switches boards before this response lands,
+  // the old attempt's id must not be installed onto the new board. Capture the
+  // generation now and ignore (best-effort abandon) any stale resolution.
+  const gen = ++game.attemptGen;
   api.startAttempt({
     puzzle: game.puzzleName,
     optimal: game.optimal,
-  }).then((r) => { if (r && r.attemptId) game.attemptId = r.attemptId; });
+  }).then((r) => {
+    if (!r || !r.attemptId) return;
+    if (gen !== game.attemptGen) {
+      // A newer board took over while this request was in flight — close the
+      // orphaned attempt server-side so it doesn't linger open forever.
+      api.finishAttempt(r.attemptId, { outcome: "abandoned", movesUsed: 0, durationMs: 0, moveSeq: "" });
+      return;
+    }
+    game.attemptId = r.attemptId;
+  });
 
+  // Clear the previous puzzle's world-best badge immediately: if the server is
+  // unreachable the fetch below resolves null and the stale value would linger.
+  if (el.world) el.world.textContent = "–";
   if (puzzleInfo) {
     if (el.world) el.world.textContent = puzzleInfo.worldBest == null ? "–" : puzzleInfo.worldBest;
   } else {
     api.getPuzzle(game.puzzleName).then((info) => {
+      if (gen !== game.attemptGen) return; // board changed meanwhile — stale badge
       if (info && el.world) el.world.textContent = info.worldBest == null ? "–" : info.worldBest;
     });
   }
@@ -904,6 +932,10 @@ function retryLevel() {
   // rather than generating a fresh scramble. Abandon any open attempt first.
   finalizeAttempt("abandoned");
   hideOverlay();
+  // Kill any in-flight roll animation NOW: if it survived the rewind it would
+  // complete after restoreInitial(), snapping its cube to the pre-retry cell and
+  // firing afterMove() on the fresh attempt.
+  game.anim = null;
   if (game.initial.length === 0) { buildLevel(game.puzzleConfig); }
   else {
     restoreInitial();
