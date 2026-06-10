@@ -1,8 +1,10 @@
 # Deploying kCube on Coolify
 
 kCube runs as a single Node process that serves both the static game and the
-JSON API. There's no build step and no runtime npm dependency — the container
-just runs `node server/server.mjs` on Node 22 (required for `node:sqlite`).
+JSON API. Today it needs no build step and no runtime npm dependency — the
+container just runs `node server/server.mjs` on Node 22 (required for
+`node:sqlite`). If you add dependencies or a build step, run `npm ci` (and any
+build script) in the image before launching.
 
 ## Quick start (Coolify)
 
