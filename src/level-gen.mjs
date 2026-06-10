@@ -16,10 +16,7 @@
  * the browser can hand it straight to THREE.Quaternion.fromArray().
  * ========================================================================== */
 
-import { mulberry32, shuffle, BOARD } from "./shared.mjs";
-
-// 4-neighbourhood for connectivity / adjacency tests.
-export const NEI = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+import { mulberry32, shuffle, BOARD, NEI, OPPOSITE, inBounds } from "./shared.mjs";
 
 // Fixed mapping from a cube's LOCAL face axis -> colour id. Order matches a
 // BoxGeometry's material groups (+X,-X,+Y,-Y,+Z,-Z) and main.js's FACE_MATERIALS.
@@ -42,12 +39,6 @@ export const DIRS = {
   ArrowLeft: { dr: 0, dc: -1, axis: [0, 0, 1], angle: Math.PI / 2 },
   ArrowUp: { dr: -1, dc: 0, axis: [1, 0, 0], angle: -Math.PI / 2 },
   ArrowDown: { dr: 1, dc: 0, axis: [1, 0, 0], angle: Math.PI / 2 },
-};
-
-// Reverse of each roll (used to undo a scramble for "show solution").
-export const OPPOSITE = {
-  ArrowRight: "ArrowLeft", ArrowLeft: "ArrowRight",
-  ArrowUp: "ArrowDown", ArrowDown: "ArrowUp",
 };
 
 /* --- minimal quaternion math, stored as [x, y, z, w] (Three.js conventions) - */
@@ -130,7 +121,6 @@ function faceUpQuat(colorId) {
 
 /* --- board helpers ---------------------------------------------------------- */
 
-export function inBounds(r, c) { return r >= 0 && r < BOARD && c >= 0 && c < BOARD; }
 function cubeAt(cubes, r, c) { return cubes.find((k) => k.row === r && k.col === c) || null; }
 function occupied(cubes, r, c) { return cubes.some((k) => k.row === r && k.col === c); }
 
@@ -160,7 +150,7 @@ function connectedCells(n, rint) {
 }
 
 // All cubes 4-connected to `cube` (its island), including `cube` itself.
-export function islandOf(cubes, cube) {
+function islandOf(cubes, cube) {
   const island = [cube];
   const seen = new Set([cube]);
   for (let i = 0; i < island.length; i++) {

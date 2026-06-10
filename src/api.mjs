@@ -26,33 +26,23 @@ export function clearToken() {
   try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ }
 }
 
-// Has a reachable backend been seen this session? null = unknown yet.
-export let available = null;
-
 export class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
 // Core request. Returns parsed JSON, or throws ApiError(status) on an HTTP
 // error, or throws a plain Error on a network failure (caller decides whether
-// to swallow it). Marks `available` based on whether the server answered.
+// to swallow it).
 async function request(method, path, body) {
   const headers = {};
   const token = getToken();
   if (token) headers.Authorization = "Bearer " + token;
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  let res;
-  try {
-    res = await fetch(BASE + path, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-  } catch (e) {
-    available = false; // network/connection failure ⇒ treat as offline
-    throw e;
-  }
-  available = true;
+  const res = await fetch(BASE + path, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) throw new ApiError(res.status, (data && data.error) || res.statusText);

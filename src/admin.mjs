@@ -1,16 +1,6 @@
 import * as api from './api.mjs';
-import { initTheme, bindThemeBtn } from './theme.mjs';
-
-const $ = (id) => document.getElementById(id);
-
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-function fmtDate(ms) {
-  return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
+import { setupTheme } from './theme.mjs';
+import { $, esc, dash, pct, fmtDate } from './ui.mjs';
 
 let currentUser = null;
 
@@ -115,9 +105,6 @@ let featured = [];
 let savedFeatured = [];
 let dragId = null;
 let solverRunning = false;
-
-const pct = (v) => (v == null ? '–' : Math.round(v * 100) + '%');
-const dash = (v) => (v == null ? '–' : v);
 
 const sameOrder = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 const isDirty = () => !sameOrder(featured, savedFeatured);
@@ -419,7 +406,5 @@ async function boot() {
   await Promise.all([loadUsers(), loadPuzzles()]);
 }
 
-initTheme();
-const themeBtn = document.getElementById('themeBtn');
-if (themeBtn) bindThemeBtn(themeBtn);
+setupTheme();
 boot();
