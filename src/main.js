@@ -32,7 +32,7 @@ const HALF = S / 2;
 const ROLL_MS = 170; // duration of a roll animation
 const STORE_KEY = "kcube.v1"; // localStorage key for persisted scores
 const DESIGN_KEY = "kcube.design";
-const DESIGN_DEFAULTS = { brightness: 1, saturation: 1, metalness: 0.05, boardMetalness: 0.40, bevel: 0.08, scale: 1 };
+const DESIGN_DEFAULTS = { brightness: 1, saturation: 1, metalness: 0.05, boardMetalness: 0.40, bevel: 0.08, bevelType: "rounded", scale: 1 };
 function loadDesign() {
   try { return { ...DESIGN_DEFAULTS, ...JSON.parse(localStorage.getItem(DESIGN_KEY)) }; }
   catch { return { ...DESIGN_DEFAULTS }; }
@@ -191,15 +191,14 @@ function topColor(quat) {
   return quatToFaces(quat.toArray())[2];
 }
 
-/* A lightly bevelled cube. RoundedBoxGeometry is single-material, so we rebuild
- * the per-face material groups (BoxGeometry order: +X,-X,+Y,-Y,+Z,-Z) by
- * classifying each triangle to the face its centroid points toward. The bevel
- * is slight, so colouring the thin rounded edges by nearest face reads cleanly. */
-function bevelledCubeGeometry(size, radius, segments) {
-  // RoundedBoxGeometry is non-indexed: every 3 consecutive vertices form one
-  // triangle. Classify each triangle's centroid to a face and emit a run of
-  // material groups so the 6 face textures map onto the bevelled box.
-  const geo = new RoundedBoxGeometry(size, size, size, segments, radius);
+/* Create cube geometry with optional beveling. Rebuild per-face material groups
+ * (BoxGeometry order: +X,-X,+Y,-Y,+Z,-Z) by classifying each triangle to the
+ * face its centroid points toward. */
+function bevelledCubeGeometry(size, radius, segments, bevelType = "rounded") {
+  const geo = bevelType === "rounded"
+    ? new RoundedBoxGeometry(size, size, size, segments, radius)
+    : new THREE.BoxGeometry(size, size, size, segments, segments, segments);
+
   const pos = geo.attributes.position;
   const faceOf = (x, y, z) => {
     const ax = Math.abs(x), ay = Math.abs(y), az = Math.abs(z);
@@ -411,7 +410,7 @@ scene.add(cursor);
 
 /* --- Cube objects ----------------------------------------------------------- */
 
-let cubeGeo = bevelledCubeGeometry(S, Math.max(0.001, design.bevel), 3);
+let cubeGeo = bevelledCubeGeometry(S, Math.max(0.001, design.bevel), 3, design.bevelType);
 
 class Cube {
   constructor(r, c) {
@@ -1229,7 +1228,14 @@ function applyBoardMetalness(v) {
 }
 
 function applyBevel(v) {
-  const newGeo = bevelledCubeGeometry(S, Math.max(0.001, v), 3);
+  const newGeo = bevelledCubeGeometry(S, Math.max(0.001, v), 3, design.bevelType);
+  for (const cube of game.cubes) cube.mesh.geometry = newGeo;
+  cubeGeo.dispose();
+  cubeGeo = newGeo;
+}
+
+function applyBevelType(type) {
+  const newGeo = bevelledCubeGeometry(S, Math.max(0.001, design.bevel), 3, type);
   for (const cube of game.cubes) cube.mesh.geometry = newGeo;
   cubeGeo.dispose();
   cubeGeo = newGeo;
@@ -1251,6 +1257,7 @@ function applyCubeScale(v) {
     set("ds-board-metalness", "dv-board-metalness", design.boardMetalness,  2);
     set("ds-bevel",           "dv-bevel",           design.bevel,           2);
     set("ds-scale",           "dv-scale",           design.scale,           2);
+    document.getElementById("ds-bevel-type").value = design.bevelType;
   }
 
   function wireSlider(sliderId, valId, key, fn, decimals) {
@@ -1270,6 +1277,12 @@ function applyCubeScale(v) {
   wireSlider("ds-bevel",           "dv-bevel",           "bevel",          applyBevel,          2);
   wireSlider("ds-scale",           "dv-scale",           "scale",          applyCubeScale,      2);
 
+  document.getElementById("ds-bevel-type").addEventListener("change", (e) => {
+    design.bevelType = e.target.value;
+    saveDesign(design);
+    applyBevelType(design.bevelType);
+  });
+
   el.designBtn.addEventListener("click", () => {
     el.designPanel.classList.remove("hidden");
     el.designBtn.blur();
@@ -1288,6 +1301,7 @@ function applyCubeScale(v) {
     applyMetalness(design.metalness);
     applyBoardMetalness(design.boardMetalness);
     applyBevel(design.bevel);
+    applyBevelType(design.bevelType);
     applyCubeScale(design.scale);
   });
 
