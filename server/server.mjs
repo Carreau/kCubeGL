@@ -675,8 +675,9 @@ const ROUTES = [
         const r = await runSolverWorker({ seed: row.seed, numCubes: row.num_cubes, scramble: row.scramble });
         return sendJson(res, 200, db.saveSolveResult(id, r));
       } catch (e) {
-        console.error('[kcube] solver worker failed', e && e.stack ? e.stack : e);
-        return sendJson(res, 500, { error: 'solver failed' });
+        const msg = e && e.message ? e.message : String(e);
+        console.error('[kcube] solver worker failed for puzzle', row.name, ':', e && e.stack ? e.stack : e);
+        return sendJson(res, 500, { error: `solver failed: ${msg}` });
       }
     } },
 
