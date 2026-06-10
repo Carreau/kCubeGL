@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-VofFY8klmktlclSOfMSg5hON4BMwUzcczVmt1A9sGLY='; style-src 'self' 'unsafe-inline'; img-src 'self' https://www.gravatar.com data:; connect-src 'self'" />
   <title>kCube — Sign In</title>
   <link rel="stylesheet" href="src/styles.css" />
   <script>(function(){var t=localStorage.getItem('kcube.theme')||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');document.documentElement.setAttribute('data-theme',t);})()</script>
@@ -71,7 +72,7 @@
         <p id="registerErr" class="auth-err hidden"></p>
       </form>
 
-      <p class="auth-admin-toggle">
+      <p class="auth-admin-toggle" id="adminToggleArea">
         <button id="adminToggleBtn" class="link-btn" type="button">Set up admin account</button>
       </p>
 

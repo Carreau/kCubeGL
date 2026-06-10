@@ -925,3 +925,13 @@ body.auth-page {
 .settings-actions .primary { padding: 10px 24px; }
 .accent-link { color: var(--accent); text-decoration: none; }
 .accent-link:hover { text-decoration: underline; }
+
+/* Grid status line (aria-live sort/count announcement). */
+.grid-status { margin: 0 0 10px; font-size: 12px; }
+
+/* Inline admin password-reset form (shown beneath a user row). */
+.pw-reset-row td { padding: 8px 10px; background: var(--g06, rgba(127,127,127,0.08)); }
+.pw-reset-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.pw-reset-form label { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.pw-reset-form input { padding: 6px 8px; }
+.pw-reset-form .auth-err:empty { display: none; }

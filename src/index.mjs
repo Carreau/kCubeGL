@@ -14,9 +14,9 @@
  * ========================================================================== */
 
 import * as api from "./api.mjs";
-import { buildCatalog, gravatarUrl, gravatarUrlForHash } from "./shared.mjs";
+import { buildCatalog } from "./shared.mjs";
 import { setupTheme } from "./theme.mjs";
-import { $, esc, dash, pct, fmtMs } from "./ui.mjs";
+import { $, esc, dash, pct, fmtMs, avatarHtml } from "./ui.mjs";
 
 const LOCAL_KEY = "kcube.v1"; // same store the game writes best scores to
 
@@ -25,23 +25,18 @@ const state = { online: false, user: null, puzzles: [], sort: "featured", sortDi
 /* --- small helpers ---------------------------------------------------------- */
 
 // Locally-saved best scores (keyed by puzzle name), the offline "your best".
+// Values are coerced to finite numbers (anything else → null) so a tampered
+// localStorage entry can never inject markup into the card HTML.
 function readLocalBest() {
-  try { return (JSON.parse(localStorage.getItem(LOCAL_KEY)) || {}).best || {}; }
-  catch { return {}; }
-}
-
-// A small Gravatar avatar <img> for a player. `entry` is a { username, avatarHash }
-// object (account or leaderboard row): we use their real Gravatar hash when they
-// linked an email, otherwise fall back to a username hash with `d=retro` so every
-// player still gets a stable generated icon. onerror hides a broken image so it
-// never leaves a gap.
-function avatar(entry, size = 18) {
-  const username = typeof entry === "string" ? entry : entry && entry.username;
-  const hash = entry && typeof entry === "object" ? entry.avatarHash : null;
-  const opts = { size: size * 2 }; // 2× for crisp HiDPI
-  const src = hash ? gravatarUrlForHash(hash, opts) : gravatarUrl(username, opts);
-  return `<img class="avatar" src="${esc(src)}" alt="" width="${size}" height="${size}" ` +
-    `loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`;
+  try {
+    const raw = (JSON.parse(localStorage.getItem(LOCAL_KEY)) || {}).best || {};
+    const best = {};
+    for (const [name, v] of Object.entries(raw)) {
+      const n = Number(v);
+      best[name] = Number.isFinite(n) ? n : null;
+    }
+    return best;
+  } catch { return {}; }
 }
 
 // "Moves over optimal": how far the world's best solve sits above the scramble's
@@ -60,7 +55,7 @@ function renderAccount() {
   }
   if (state.user) {
     box.innerHTML =
-      `<span class="who-pill">${avatar(state.user)}@${esc(state.user.username)}</span>` +
+      `<span class="who-pill">${avatarHtml(state.user)}@${esc(state.user.username)}</span>` +
       (state.user.isAdmin ? `<a href="admin.html" class="link-btn">Admin</a>` : '') +
       `<a href="settings.html" class="link-btn">Settings</a>` +
       `<button id="signout" class="link-btn" type="button">Sign out</button>`;
@@ -200,7 +195,24 @@ function cardHtml(p) {
 // Render the catalogue split into a "Featured" group (pinned puzzles, in admin
 // order) and an "All puzzles" group (the rest), each sorted by the active key.
 // With nothing pinned, fall back to a single ungrouped grid.
+// Human-readable sort labels for the announced status line.
+const SORT_LABELS = {
+  featured: "featured", fail: "fail rate", over: "moves gap", effort: "effort",
+  scramble: "scramble", cubes: "cubes", name: "name",
+};
+
+// One short aria-live status line ("40 puzzles · sorted by fail rate") instead
+// of announcing the whole grid — screen readers shouldn't be flooded on resort.
+function updateGridStatus() {
+  const el = $("gridStatus");
+  if (!el) return;
+  const n = state.puzzles.length;
+  const label = SORT_LABELS[state.sort] || state.sort;
+  el.textContent = `${n} puzzle${n === 1 ? "" : "s"} · sorted by ${label}`;
+}
+
 function renderGrid() {
+  updateGridStatus();
   const cmp = getSortFn(state.sort, state.sortDir);
   const sortGroup = (arr) => (cmp ? [...arr].sort(cmp) : arr);
   const grid = $("grid");
@@ -233,24 +245,38 @@ function go(name) { location.href = `play.html?puzzle=${encodeURIComponent(name)
 // on a card starts that puzzle.
 $("grid").addEventListener("click", (e) => {
   const lb = e.target.closest(".lb-btn");
-  if (lb) { e.stopPropagation(); openDetail(lb.dataset.name); return; }
+  if (lb) { openDetail(lb.dataset.name); return; }
   const card = e.target.closest(".card");
   if (card) go(card.dataset.name);
 });
 $("grid").addEventListener("keydown", (e) => {
   if (e.key !== "Enter" && e.key !== " ") return;
+  // Let Enter/Space on the Leaderboard button be a button press, not card nav.
+  if (e.target.closest(".lb-btn")) return;
   const card = e.target.closest(".card");
   if (card) { e.preventDefault(); go(card.dataset.name); }
 });
 
 /* --- per-puzzle detail (leaderboard + difficulty) --------------------------- */
 
+// Generation counter: a slow response for an earlier dialog must never
+// overwrite the one currently open.
+let detailGen = 0;
+// The element focused before the dialog opened, restored on close.
+let detailReturnFocus = null;
+
 async function openDetail(name) {
+  const gen = ++detailGen;
   const body = $("detailBody");
   body.innerHTML = `<h2>${esc(name)}</h2><p class="muted">Loading…</p>`;
-  $("detail").classList.remove("hidden");
+  if ($("detail").classList.contains("hidden")) {
+    detailReturnFocus = document.activeElement;
+    $("detail").classList.remove("hidden");
+  }
+  $("detailClose").focus();
 
   const info = state.online ? await api.getPuzzle(name) : null;
+  if (gen !== detailGen) return; // a newer openDetail/close superseded this load
   if (!info) {
     body.innerHTML =
       `<h2>${esc(name)}</h2>` +
@@ -264,7 +290,7 @@ async function openDetail(name) {
   const st = info.stats || {};
   const rows = (info.leaderboard || []).map((r, i) =>
     `<tr${r.you ? ' class="me"' : ""}>` +
-    `<td>${i + 1}</td><td>${avatar(r)}@${esc(r.username)}</td>` +
+    `<td>${i + 1}</td><td>${avatarHtml(r)}@${esc(r.username)}</td>` +
     `<td>${r.best}</td><td>${fmtMs(r.durationMs)}</td><td>${dash(r.attempts)}</td></tr>`
   ).join("");
 
@@ -295,7 +321,16 @@ async function openDetail(name) {
   $("detailPlay").addEventListener("click", () => go(info.name));
 }
 
-function closeDetail() { $("detail").classList.add("hidden"); }
+function closeDetail() {
+  const d = $("detail");
+  if (d.classList.contains("hidden")) return;
+  detailGen++; // invalidate any in-flight load for the dialog we just closed
+  d.classList.add("hidden");
+  if (detailReturnFocus && typeof detailReturnFocus.focus === "function") {
+    detailReturnFocus.focus();
+  }
+  detailReturnFocus = null;
+}
 $("detailClose").addEventListener("click", closeDetail);
 $("detail").addEventListener("click", (e) => { if (e.target.id === "detail") closeDetail(); });
 window.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDetail(); });
@@ -305,6 +340,7 @@ function updateSortChips() {
     const key = chip.dataset.sort;
     const active = key === state.sort;
     chip.classList.toggle("active", active);
+    chip.setAttribute("aria-pressed", active ? "true" : "false");
     const dirEl = chip.querySelector(".sort-dir");
     if (dirEl) dirEl.textContent = state.sortDir === "desc" ? "↓" : "↑";
   });
