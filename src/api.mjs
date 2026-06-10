@@ -209,3 +209,36 @@ export async function adminReorderPuzzles(ids) {
 export async function adminSolvePuzzle(id) {
   return request('POST', `/admin/puzzles/${id}/solve`, {});
 }
+
+/* --- Tutorials --------------------------------------------------------------- */
+
+// Fetch the public tutorial list (name, title, mode, sortOrder).
+export function listTutorials() { return tryReq('GET', '/tutorials'); }
+
+// Fetch full tutorial data for the player. Throws ApiError on failure.
+export async function getTutorial(name) {
+  return request('GET', `/tutorials/${encodeURIComponent(name)}`);
+}
+
+// Admin: list all tutorials.
+export function adminListTutorials() { return tryReq('GET', '/admin/tutorials'); }
+
+// Admin: create a new tutorial. Throws ApiError (409 = name taken).
+export async function adminCreateTutorial(data) {
+  return request('POST', '/admin/tutorials', data);
+}
+
+// Admin: full replace / save from designer.
+export async function adminSaveTutorial(name, data) {
+  return request('PUT', `/admin/tutorials/${encodeURIComponent(name)}`, data);
+}
+
+// Admin: delete a tutorial.
+export async function adminDeleteTutorial(name) {
+  return request('DELETE', `/admin/tutorials/${encodeURIComponent(name)}`, {});
+}
+
+// Admin: returns the export download URL (use as an <a href> or window.open).
+export function adminTutorialExportUrl(name) {
+  return `/api/admin/tutorials/${encodeURIComponent(name)}/export`;
+}

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://unpkg.com/three@0.160.0/ 'sha256-kVYO0ltRgFGyFqNULHlhK2rhKwf4/bZDuGt/RZC2xsM='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" />
+  <title>kCube — tutorial</title>
+  <script src="src/theme-init.js"></script>
+  <link rel="stylesheet" href="src/styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <style>
+    #tut-hud {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      pointer-events: none;
+    }
+    #tut-hud .link-btn { pointer-events: auto; }
+    #tut-title { font-weight: 600; font-size: 15px; flex: 1; }
+    #step-counter { font-size: 13px; color: var(--muted); white-space: nowrap; }
+
+    #hint-wrap {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      display: flex;
+      justify-content: center;
+      padding: 0 16px 20px;
+      pointer-events: none;
+    }
+    #hint-box {
+      background: var(--panel);
+      border: 1px solid var(--g12);
+      border-radius: 10px;
+      padding: 12px 20px;
+      max-width: 480px;
+      font-size: 15px;
+      line-height: 1.5;
+      text-align: center;
+      min-height: 44px;
+      backdrop-filter: blur(6px);
+    }
+    #hint-box:empty { display: none; }
+
+    #mode-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--tint);
+      color: var(--accent);
+      border: 1px solid var(--tint-bd);
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="scene"></canvas>
+
+    <div id="tut-hud">
+      <a class="link-btn" href="index.html">← Puzzles</a>
+      <button id="themeBtn" type="button" class="link-btn">Light</button>
+      <span id="tut-title"></span>
+      <span id="mode-badge"></span>
+      <span id="step-counter"></span>
+    </div>
+
+    <div id="hint-wrap">
+      <div id="hint-box"></div>
+    </div>
+
+    <div id="overlay" class="hidden">
+      <div class="panel">
+        <h1 id="overlay-title">kCube</h1>
+        <p id="overlay-body"></p>
+        <button id="overlay-btn">Back to puzzles</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="src/tutorial.mjs"></script>
+</body>
+</html>

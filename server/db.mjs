@@ -89,6 +89,19 @@ CREATE TABLE IF NOT EXISTS attempts (
 CREATE INDEX IF NOT EXISTS idx_attempts_puzzle      ON attempts(puzzle_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_user_puzzle ON attempts(user_id, puzzle_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_won         ON attempts(puzzle_id, outcome, moves_used);
+
+CREATE TABLE IF NOT EXISTS tutorials (
+  id                 INTEGER PRIMARY KEY,
+  name               TEXT NOT NULL UNIQUE,
+  title              TEXT NOT NULL DEFAULT '',
+  cursor_index       INTEGER NOT NULL DEFAULT 0,
+  initial_board_json TEXT NOT NULL DEFAULT '[]',
+  steps_json         TEXT NOT NULL DEFAULT '[]',
+  mode               TEXT NOT NULL DEFAULT 'hint',
+  sort_order         INTEGER NOT NULL DEFAULT 0,
+  created_at         INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at         INTEGER NOT NULL DEFAULT (unixepoch())
+);
 `;
 
 const now = () => Date.now();
@@ -117,7 +130,7 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   // Table names can't be bound parameters, so they're interpolated into the
   // PRAGMA/ALTER below — restrict them to the known schema tables so a future
   // caller can't accidentally turn this into SQL injection.
-  const MIGRATABLE = new Set(["users", "passkeys", "webauthn_challenges", "puzzles", "attempts"]);
+  const MIGRATABLE = new Set(["users", "passkeys", "webauthn_challenges", "puzzles", "attempts", "tutorials"]);
   const addColumn = (table, name, ddl) => {
     if (!MIGRATABLE.has(table)) throw new Error(`addColumn: unknown table ${table}`);
     if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === name)) {
@@ -585,6 +598,54 @@ export class Db {
       avgDurationMs: r.avgDurationMs ?? null,
       avgMovesOverOptimal: over && over.d != null ? over.d : null,
     };
+  }
+
+  /* --- tutorials -------------------------------------------------------------- */
+
+  listTutorials() {
+    return this.db.prepare(
+      `SELECT id, name, title, mode, sort_order AS sortOrder, cursor_index AS cursorIndex,
+              created_at AS createdAt, updated_at AS updatedAt
+         FROM tutorials ORDER BY sort_order ASC, id ASC`
+    ).all();
+  }
+
+  tutorialByName(name) {
+    const row = this.db.prepare("SELECT * FROM tutorials WHERE name = ?").get(name);
+    if (!row) return null;
+    return {
+      id:           row.id,
+      name:         row.name,
+      title:        row.title,
+      cursorIndex:  row.cursor_index,
+      initialBoard: JSON.parse(row.initial_board_json),
+      steps:        JSON.parse(row.steps_json),
+      mode:         row.mode,
+      sortOrder:    row.sort_order,
+      createdAt:    row.created_at,
+      updatedAt:    row.updated_at,
+    };
+  }
+
+  upsertTutorial(name, { title = '', cursorIndex = 0, initialBoard = [], steps = [], mode = 'hint', sortOrder = 0 } = {}) {
+    const ts = now();
+    const existing = this.db.prepare("SELECT id FROM tutorials WHERE name = ?").get(name);
+    if (existing) {
+      this.db.prepare(
+        `UPDATE tutorials SET title=?, cursor_index=?, initial_board_json=?, steps_json=?,
+                              mode=?, sort_order=?, updated_at=? WHERE name=?`
+      ).run(title, cursorIndex, JSON.stringify(initialBoard), JSON.stringify(steps), mode, sortOrder, ts, name);
+      return Number(existing.id);
+    }
+    const r = this.db.prepare(
+      `INSERT INTO tutorials (name, title, cursor_index, initial_board_json, steps_json, mode, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(name, title, cursorIndex, JSON.stringify(initialBoard), JSON.stringify(steps), mode, sortOrder, ts, ts);
+    return Number(r.lastInsertRowid);
+  }
+
+  deleteTutorial(name) {
+    this.db.prepare("DELETE FROM tutorials WHERE name = ?").run(name);
   }
 
   /* --- the catalogue for the landing page ----------------------------------- */

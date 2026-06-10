@@ -492,6 +492,20 @@ const ROUTES = [
     res.writeHead(204); return res.end();
   } },
 
+  // GET /api/tutorials   — public list (name, title, mode, sortOrder only)
+  { method: "GET", path: "/api/tutorials", handler({ res, db }) {
+    return sendJson(res, 200, db.listTutorials());
+  } },
+
+  // GET /api/tutorials/:name   — full tutorial data for the player
+  { method: "GET", path: "/api/tutorials/:name", handler({ res, db, params }) {
+    const name = cleanName(params.name);
+    if (!name) return sendJson(res, 400, { error: "bad tutorial name" });
+    const t = db.tutorialByName(name);
+    if (!t) return sendJson(res, 404, { error: "no such tutorial" });
+    return sendJson(res, 200, t);
+  } },
+
   // POST /api/auth/passkey/register/options  (requires auth)
   { method: "POST", path: "/api/auth/passkey/register/options", auth: "user", limit: { bucket: "passkey", max: 30 },
     handler({ req, res, db, user }) {
@@ -689,6 +703,69 @@ const ROUTES = [
     }
     return sendJson(res, 200, { ok: true });
   } },
+
+  // GET /api/admin/tutorials   — list (with full data) for the designer
+  { method: "GET", path: "/api/admin/tutorials", auth: "admin", handler({ res, db }) {
+    return sendJson(res, 200, db.listTutorials());
+  } },
+
+  // POST /api/admin/tutorials  — create a new tutorial
+  { method: "POST", path: "/api/admin/tutorials", auth: "admin", body: true,
+    handler({ res, db, body }) {
+      const name = cleanName(body.name);
+      if (!name) return sendJson(res, 400, { error: "bad tutorial name" });
+      if (db.tutorialByName(name)) return sendJson(res, 409, { error: "name taken" });
+      const id = db.upsertTutorial(name, {
+        title:        String(body.title || '').slice(0, 120),
+        cursorIndex:  toInt(body.cursorIndex) ?? 0,
+        initialBoard: Array.isArray(body.initialBoard) ? body.initialBoard : [],
+        steps:        Array.isArray(body.steps) ? body.steps : [],
+        mode:         body.mode === 'guided' ? 'guided' : 'hint',
+        sortOrder:    toInt(body.sortOrder) ?? 0,
+      });
+      return sendJson(res, 201, { id, name });
+    } },
+
+  // PUT /api/admin/tutorials/:name  — full replace / save from designer
+  { method: "PUT", path: "/api/admin/tutorials/:name", auth: "admin", body: true,
+    handler({ res, db, params, body }) {
+      const name = cleanName(params.name);
+      if (!name) return sendJson(res, 400, { error: "bad tutorial name" });
+      const id = db.upsertTutorial(name, {
+        title:        String(body.title || '').slice(0, 120),
+        cursorIndex:  toInt(body.cursorIndex) ?? 0,
+        initialBoard: Array.isArray(body.initialBoard) ? body.initialBoard : [],
+        steps:        Array.isArray(body.steps) ? body.steps : [],
+        mode:         body.mode === 'guided' ? 'guided' : 'hint',
+        sortOrder:    toInt(body.sortOrder) ?? 0,
+      });
+      return sendJson(res, 200, { id, name });
+    } },
+
+  // DELETE /api/admin/tutorials/:name
+  { method: "DELETE", path: "/api/admin/tutorials/:name", auth: "admin",
+    handler({ res, db, params }) {
+      const name = cleanName(params.name);
+      if (!name) return sendJson(res, 400, { error: "bad tutorial name" });
+      db.deleteTutorial(name);
+      return sendJson(res, 200, { ok: true });
+    } },
+
+  // GET /api/admin/tutorials/:name/export  — download as JSON file
+  { method: "GET", path: "/api/admin/tutorials/:name/export", auth: "admin",
+    handler({ res, db, params }) {
+      const name = cleanName(params.name);
+      if (!name) return sendJson(res, 400, { error: "bad tutorial name" });
+      const t = db.tutorialByName(name);
+      if (!t) return sendJson(res, 404, { error: "no such tutorial" });
+      const body = JSON.stringify(t, null, 2);
+      res.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${name}.json"`,
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.end(body);
+    } },
 ];
 
 // Pre-split every route pattern once so per-request matching is just an array walk.

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://unpkg.com/three@0.160.0/ 'sha256-kVYO0ltRgFGyFqNULHlhK2rhKwf4/bZDuGt/RZC2xsM='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'" />
+  <title>kCube — designer</title>
+  <script src="src/theme-init.js"></script>
+  <link rel="stylesheet" href="src/styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <style>
+    /* ── top bar ── */
+    #des-bar {
+      position: absolute; top: 0; left: 0; right: 0;
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 12px;
+      background: var(--panel); border-bottom: 1px solid var(--g08);
+      z-index: 10;
+    }
+    #des-bar .link-btn { flex-shrink: 0; }
+    #des-bar .sep { flex: 1; }
+    .mode-btn {
+      padding: 5px 14px; border-radius: 6px; font-size: 13px; font-weight: 500;
+      background: var(--g06); border: 1px solid var(--g10); color: var(--ink);
+      cursor: pointer;
+    }
+    .mode-btn.active {
+      background: var(--tint); border-color: var(--tint-bd); color: var(--accent);
+    }
+    .mode-btn:hover:not(.active) { background: var(--g10); }
+
+    /* ── place grid overlay ── */
+    #place-grid {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      display: none; grid-template-columns: repeat(5, 52px);
+      grid-template-rows: repeat(5, 52px); gap: 4px;
+      z-index: 20;
+    }
+    #place-grid.visible { display: grid; }
+    .grid-cell {
+      border-radius: 6px; border: 2px solid var(--g14);
+      cursor: pointer; transition: background 0.1s;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    .grid-cell:hover { background: var(--g10); border-color: var(--g28); }
+    .grid-cell.occupied {
+      background: var(--tint); border-color: var(--tint-bd);
+    }
+    .grid-cell.occupied:hover { background: var(--tint-hv2); }
+    .grid-cell.cursor-here { border-color: var(--accent); border-width: 2.5px; }
+
+    /* ── orient label ── */
+    #orient-hint {
+      position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
+      background: var(--panel); border: 1px solid var(--g10); border-radius: 8px;
+      padding: 8px 18px; font-size: 13px; color: var(--muted);
+      display: none; z-index: 10; white-space: nowrap; pointer-events: none;
+    }
+    #orient-hint.visible { display: block; }
+
+    /* ── right sidebar ── */
+    #sidebar {
+      position: absolute; top: 44px; right: 0; bottom: 0;
+      width: 260px; background: var(--panel-st); border-left: 1px solid var(--g08);
+      overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px;
+      z-index: 10;
+    }
+    #sidebar label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 3px; }
+    #sidebar input, #sidebar select, #sidebar textarea {
+      width: 100%; box-sizing: border-box;
+      background: var(--g06); border: 1px solid var(--g12); border-radius: 6px;
+      color: var(--ink); font: inherit; padding: 6px 9px; font-size: 13px;
+    }
+    #sidebar textarea { resize: vertical; min-height: 60px; }
+    #sidebar input:focus, #sidebar select:focus, #sidebar textarea:focus {
+      outline: none; border-color: var(--accent);
+    }
+    .sidebar-section { display: flex; flex-direction: column; gap: 6px; }
+    .sidebar-section h4 {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--muted); margin: 0;
+    }
+    .btn-row { display: flex; gap: 6px; }
+    .btn-row button {
+      flex: 1; padding: 7px 0; border-radius: 6px; font-size: 13px; font-weight: 500;
+      border: 1px solid var(--g12); background: var(--g06); color: var(--ink); cursor: pointer;
+    }
+    .btn-row button:hover { background: var(--g12); }
+    .btn-row button.primary-btn {
+      background: var(--tint); border-color: var(--tint-bd); color: var(--accent);
+    }
+    .btn-row button.primary-btn:hover { background: var(--tint-hv2); }
+    .btn-row button.danger-btn { color: var(--err-ink); border-color: var(--err-bd); }
+    .btn-row button.danger-btn:hover { background: var(--err-bg-hv); }
+
+    /* ── step list ── */
+    #step-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+    #step-list li {
+      background: var(--g06); border: 1px solid var(--g08); border-radius: 6px;
+      padding: 6px 8px; font-size: 12px; display: flex; align-items: flex-start; gap: 6px;
+    }
+    #step-list li .step-num { color: var(--muted); flex-shrink: 0; }
+    #step-list li .step-hint { flex: 1; word-break: break-word; }
+    #step-list li .step-del {
+      background: none; border: none; color: var(--err-ink); cursor: pointer;
+      font-size: 14px; padding: 0; flex-shrink: 0;
+    }
+    #step-list li.active-step { border-color: var(--accent); background: var(--tint); }
+
+    /* ── annotation panel ── */
+    #annotate-panel {
+      position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+      background: var(--panel-hi); border: 1px solid var(--g14); border-radius: 10px;
+      padding: 14px 18px; width: 360px; max-width: calc(100vw - 300px);
+      display: none; z-index: 20;
+    }
+    #annotate-panel.visible { display: block; }
+    #annotate-panel p { font-size: 13px; margin: 0 0 8px; color: var(--muted); }
+    #annotate-input {
+      width: 100%; box-sizing: border-box;
+      background: var(--g06); border: 1px solid var(--g12); border-radius: 6px;
+      color: var(--ink); font: inherit; padding: 7px 10px; font-size: 14px; margin-bottom: 8px;
+    }
+    #annotate-input:focus { outline: none; border-color: var(--accent); }
+    #annotate-options { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    #annotate-options label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
+    #annotate-commit { padding: 6px 18px; border-radius: 6px; border: none;
+      background: var(--accent); color: #000; font-weight: 600; font-size: 13px; cursor: pointer; }
+
+    /* ── status toast ── */
+    #status-toast {
+      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+      background: var(--panel); border: 1px solid var(--g12); border-radius: 8px;
+      padding: 8px 18px; font-size: 13px; z-index: 30;
+      opacity: 0; transition: opacity 0.2s; pointer-events: none;
+    }
+    #status-toast.show { opacity: 1; }
+    #status-toast.err { border-color: var(--err-bd); color: var(--err-ink); }
+
+    /* canvas takes full space minus topbar, minus sidebar */
+    #scene { display: block; position: absolute; top: 44px; left: 0; right: 260px; bottom: 0; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="scene"></canvas>
+
+    <!-- Top bar -->
+    <div id="des-bar">
+      <a class="link-btn" href="admin.html">← Admin</a>
+      <button id="themeBtn" type="button" class="link-btn">Light</button>
+      <span class="sep"></span>
+      <button class="mode-btn active" id="btn-place" type="button">Place</button>
+      <button class="mode-btn"        id="btn-orient" type="button">Orient</button>
+      <button class="mode-btn"        id="btn-record" type="button">Record</button>
+      <span class="sep"></span>
+      <span id="mode-label" style="font-size:12px;color:var(--muted)">Click grid cells to add / remove cubes</span>
+    </div>
+
+    <!-- Place-mode grid overlay -->
+    <div id="place-grid"></div>
+
+    <!-- Orient-mode hint -->
+    <div id="orient-hint">Click a cube to select it, then use arrow keys to set its orientation</div>
+
+    <!-- Annotation panel (shown after each recorded move) -->
+    <div id="annotate-panel">
+      <p>Add a hint for this step (optional):</p>
+      <input id="annotate-input" type="text" placeholder="e.g. Roll right to reach the other cube" autocomplete="off" />
+      <div id="annotate-options">
+        <label><input id="ann-guided" type="checkbox" /> Guided (player must use this exact key)</label>
+        <button id="annotate-commit" type="button">Add step</button>
+      </div>
+    </div>
+
+    <!-- Right sidebar -->
+    <div id="sidebar">
+      <div class="sidebar-section">
+        <h4>Tutorial</h4>
+        <div>
+          <label>Name (URL slug)</label>
+          <input id="meta-name" type="text" placeholder="my-tutorial" autocomplete="off" />
+        </div>
+        <div>
+          <label>Title</label>
+          <input id="meta-title" type="text" placeholder="My Tutorial" autocomplete="off" />
+        </div>
+        <div>
+          <label>Default mode</label>
+          <select id="meta-mode">
+            <option value="hint">Hint (free play + arrows)</option>
+            <option value="guided">Guided (enforce each move)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Steps <span id="step-count" style="color:var(--muted);font-weight:400"></span></h4>
+        <ul id="step-list"></ul>
+        <div class="btn-row">
+          <button id="btn-clear-steps" class="danger-btn" type="button">Clear all</button>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <h4>Save / Export</h4>
+        <div class="btn-row">
+          <button id="btn-save" class="primary-btn" type="button">Save to DB</button>
+          <button id="btn-export" type="button">Export JSON</button>
+        </div>
+        <div class="btn-row">
+          <button id="btn-load" type="button">Load from DB</button>
+          <button id="btn-test" type="button">Test tutorial</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status toast -->
+    <div id="status-toast"></div>
+  </div>
+
+  <script type="module" src="src/designer.mjs"></script>
+</body>
+</html>
