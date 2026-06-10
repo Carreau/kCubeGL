@@ -12,7 +12,7 @@ Key features:
 - View rotation (Q/E keys) and solution playback
 - A landing page (`index.html`) that lists the catalogue and lets you **sort by difficulty** (failure rate, world-best moves over scramble length, cube count, name), separate from the game page (`play.html?puzzle=<name>`)
 - A **backend** (`server/`) using Node's built-in `node:sqlite` — the source of truth for the catalogue, username accounts (bearer-token sessions, with additive WebAuthn/passkey login and optional password login), leaderboards, per-attempt tracking that feeds puzzle-difficulty and player-skill stats, and an **admin** page to pin/order which puzzles are featured first. Submitting scores and fetching puzzles assume the server is there.
-- Best scores also persist in `localStorage` (keyed by puzzle name); if the server is briefly unreachable the client falls back to a cold-start cache (the deterministic catalogue computed locally) so play isn't blocked, but the server is the norm — not an optional add-on
+- Best scores also persist in `localStorage` (keyed by puzzle name) as a client-side cache. The server is always expected to be reachable; the app does not need to degrade gracefully to an offline mode
 
 ## Commands
 
@@ -28,7 +28,7 @@ npm run test:api       # Backend API test only (no browser; fast)
 npm run test:smoke     # Headless Playwright end-to-end test only
 ```
 
-**Requires Node ≥ 22.5** for the backend (built-in `node:sqlite`; also declared in `package.json` `engines`). Today there is no build step: ES modules are served directly, Three.js loads from a CDN at runtime, and the server runs on Node built-ins — but this is a convenience, not a hard rule, and npm dependencies or a build step are acceptable (see Important Constraints). The DB file `server/kcube.sqlite` is created on first run (gitignored). Set `KCUBE_DB=:memory:` for an ephemeral DB (the tests do this).
+**Requires Node ≥ 22.5** for the backend (built-in `node:sqlite`; also declared in `package.json` `engines`). A build step and npm dependencies are fully accepted — wire any build into `npm run build` and ensure `npm run check`/`npm test` stay green. Currently ES modules are served directly and Three.js loads from a CDN, but that is not a constraint. The DB file `server/kcube.sqlite` is created on first run (gitignored). Set `KCUBE_DB=:memory:` for an ephemeral DB (the tests do this).
 
 **Auth & deploy env vars:** `KCUBE_ADMIN_TOKEN` (a bootstrap secret) is the only way to mint an admin — `POST /api/users` grants admin only when its `adminToken` field matches it; if unset, no new admins can be created via the API. `KCUBE_TRUST_PROXY=1` (or `true`) tells the server to trust `X-Forwarded-Host`/`X-Forwarded-Proto` (used to derive the WebAuthn origin/RP-ID); set it behind a TLS-terminating reverse proxy or passkeys/origins will be wrong (it also makes rate limiting key on the last `X-Forwarded-For` entry — the one the trusted proxy appended). `KCUBE_RATE_LIMIT` overrides the per-minute cap for every rate-limit bucket (0 disables limiting; the tests set this).
 
@@ -45,7 +45,7 @@ npm run test:smoke     # Headless Playwright end-to-end test only
 - **src/login.mjs** — Sign-in page logic: username registration (with optional password), password login, and the passkey (WebAuthn) register/login ceremonies against the `/api/auth/*` endpoints.
 - **src/admin.mjs** — Admin-page logic (user management incl. password resets; featured-puzzle pin/order UI with drag-to-reorder + unsaved-state indicator; the explicit "Run solver" step that fills in per-puzzle difficulty).
 - **src/settings.mjs** — Settings page logic: set/clear the Gravatar email via `PATCH /api/me`.
-- **src/api.mjs** — Resilient browser client for the JSON API (token storage + fetch wrappers; calls no-op to null if the server is briefly unreachable so the UI can fall back to the cold-start cache).
+- **src/api.mjs** — Browser client for the JSON API (token storage + fetch wrappers). The server is always assumed to be reachable; API failures surface as errors rather than silently degrading.
 - **src/shared.mjs** — Dependency-free puzzle math (seeded PRNG, `buildCatalog`, `catalogByName`, `budgetFor`) plus the board constants (`BOARD`, `NEI`, `OPPOSITE`, `inBounds`) imported by BOTH the game and the server. Defines the deterministic catalogue. Must not import Three.js or touch the DOM.
 - **src/level-gen.mjs** — Pure, dependency-free board generation: the single source of truth for the seeded scramble, quaternion math, and connectivity helpers. Exports `generateLevel(config)` and is imported by both `src/main.js` and `src/catalog-solve.mjs` (it imports the catalogue math from `src/shared.mjs`). Must stay pure (no Three.js, no DOM).
 - **src/solver.mjs** — Pure-state solvers (no Three.js): `bfsSolve` (provably-optimal "full solver"), `greedySolve`, `beamSolve` (approximate, tight upper bound), and `minBeamWidthToSolve` (the search-effort difficulty guide: smallest beam width that solves the board — a "how much planning a human needs" signal). Operate on a plain `{cubes:[{id,r,c,faces}], cursorId}` state.
@@ -95,9 +95,9 @@ Puzzles are **generated backwards**: start with a solved board (all cubes one co
 
 ### Persistence
 
-- **Local best scores**: `localStorage` under key `kcube.v1` as `{ best: { <puzzleName>: movesUsed }, cleared }`. Kept alongside the server so a brief outage never loses your record.
+- **Local best scores**: `localStorage` under key `kcube.v1` as `{ best: { <puzzleName>: movesUsed }, cleared }`. Client-side cache kept in sync with the server; the server is the authoritative source.
 - **Auth token**: `localStorage` key `kcube.token` (a bearer token minted by `POST /api/users`).
-- **Backend (optional)**: SQLite via `server/db.mjs`. The schema is **attempt-centric** — one `attempts` row per started board, stamped with an outcome (`won`/`lost`/`abandoned`), `moves_used` and `duration_ms`. **Wins are replay-verified**: the server replays the submitted `move_seq` (the player's R/L/U/D cursor path) against its own copy of the deterministic board (`replayMoves` in `src/catalog-solve.mjs`) and accepts the win only if the sequence is legal, ends solved, and its paid roll count equals `moves_used`. Best-scores are `MIN(moves_used)` over winning attempts; difficulty and skill are aggregates over the same rows.
+- **Backend**: SQLite via `server/db.mjs`. The schema is **attempt-centric** — one `attempts` row per started board, stamped with an outcome (`won`/`lost`/`abandoned`), `moves_used` and `duration_ms`. **Wins are replay-verified**: the server replays the submitted `move_seq` (the player's R/L/U/D cursor path) against its own copy of the deterministic board (`replayMoves` in `src/catalog-solve.mjs`) and accepts the win only if the sequence is legal, ends solved, and its paid roll count equals `moves_used`. Best-scores are `MIN(moves_used)` over winning attempts; difficulty and skill are aggregates over the same rows.
 
 ### Backend & Data Model
 
@@ -148,10 +148,10 @@ Other animations (overlay fade, cube scale on win) use CSS transitions.
 
 ## Important Constraints
 
-- **Dependencies are allowed** — the project no longer enforces a zero-dependency / no-build-step rule. It still ships today as raw ES modules with Three.js loaded from a CDN and a server on Node built-ins, but adding npm dependencies, a bundler, or a build step is fine when it earns its keep (e.g. a battle-tested CBOR/WebAuthn library in place of a hand-rolled one). If you introduce a build step, wire it into `package.json` scripts and CI so `npm run check`/`npm test` stay green.
+- **Dependencies and a build step are the norm** — npm packages, a bundler, or other build tooling are all fine. Wire any build into `npm run build` and keep `npm run check`/`npm test` green. Currently Three.js loads from a CDN and the server uses Node built-ins, but that is not a hard constraint — adopt better libraries or tooling when they earn their keep.
 - **Node ≥ 22.5** — the backend uses the built-in `node:sqlite` module. CI runs on Node 22.
 - **Shared code stays pure** — `src/shared.mjs` is imported by both browser and server, so it must not import Three.js or touch the DOM.
-- **Backend is the norm, client is resilient** — the server is the source of truth, but `src/api.mjs` calls must stay best-effort (no-op to null on failure) so a brief outage falls back to the cold-start cache (deterministic catalogue + `localStorage`) instead of breaking. Don't over-rely on the DB on the hot path, and don't bake in hard assumptions that the server is *always* reachable.
+- **Always-online** — the app assumes the server is always reachable. There is no offline mode, no cold-start cache fallback, and no requirement for API calls to silently no-op on failure. Surface errors to the user when the server is unreachable instead of hiding them.
 - **Deterministic puzzles** — keep all catalogue and board-generation randomness on the seeded PRNGs (`CATALOG_SEED` in `buildCatalog`, `config.seed` in `generateLevel`); never `Math.random()` in those paths, or puzzles/names diverge across users and leaderboards break.
 - **Single event loop** — async game operations (renders, animations, level transitions) are orchestrated via frame callbacks
 - **Quaternion arithmetic** — rotations are applied via quaternion multiplication; understanding quaternion order (q1 * q2 applies q2 first) is essential for correct roll behavior
