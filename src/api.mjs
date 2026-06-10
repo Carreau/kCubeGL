@@ -33,7 +33,7 @@ export class ApiError extends Error {
 // Core request. Returns parsed JSON, or throws ApiError(status) on an HTTP
 // error, or throws a plain Error on a network failure (caller decides whether
 // to swallow it).
-async function request(method, path, body) {
+async function request(method, path, body, { keepalive = false } = {}) {
   const headers = {};
   const token = getToken();
   if (token) headers.Authorization = "Bearer " + token;
@@ -42,6 +42,7 @@ async function request(method, path, body) {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    keepalive,
   });
   const text = await res.text();
   let data = null;
@@ -59,8 +60,8 @@ async function request(method, path, body) {
 
 // Best-effort GET/POST/PATCH: swallow any failure and return `fallback`
 // (default null) so callers can stay terse and the game tolerates no backend.
-async function tryReq(method, path, body, fallback = null) {
-  try { return await request(method, path, body); }
+async function tryReq(method, path, body, fallback = null, opts) {
+  try { return await request(method, path, body, opts); }
   catch { return fallback; }
 }
 
@@ -120,18 +121,20 @@ export function getPuzzle(name) { return tryReq("GET", `/puzzles/${encodeURIComp
 /* --- Attempts --------------------------------------------------------------- */
 
 // Record that the player has started a fresh attempt at a puzzle (by name).
-// `optimal` lets the client report a shortest-known solve. Returns { attemptId }
-// or null offline.
-export function startAttempt({ puzzle, optimal }) {
-  return tryReq("POST", "/attempts", { puzzle, optimal });
+// Returns { attemptId } or null offline. (The server derives the puzzle's
+// shortest-known solve itself; client claims are not accepted.)
+export function startAttempt({ puzzle }) {
+  return tryReq("POST", "/attempts", { puzzle });
 }
 
 // Finalise an attempt with its outcome and score. `moveSeq` is the player's
 // recorded cursor path (R/L/U/D string), stored for replay/analysis. Returns
-// { best, isRecord, worldBest } or null offline.
+// { best, isRecord, worldBest } or null offline. `keepalive` lets the request
+// outlive a same-instant navigation (e.g. abandoning via the "Puzzles" link),
+// so the abandon isn't silently dropped when the page goes away.
 export function finishAttempt(id, { outcome, movesUsed, durationMs, moveSeq }) {
   if (!id) return Promise.resolve(null);
-  return tryReq("PATCH", `/attempts/${id}`, { outcome, movesUsed, durationMs, moveSeq });
+  return tryReq("PATCH", `/attempts/${id}`, { outcome, movesUsed, durationMs, moveSeq }, null, { keepalive: true });
 }
 
 // Mark an in-progress attempt abandoned on page unload. Uses sendBeacon, which

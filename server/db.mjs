@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS puzzles (
   num_cubes   INTEGER NOT NULL,
   scramble    INTEGER NOT NULL,          -- generation depth ≈ shortest solve
   par         INTEGER NOT NULL,          -- bonus-free move budget
-  optimal     INTEGER,                   -- shortest known solve (client-reported)
+  optimal     INTEGER,                   -- shortest known solve (seeded = scramble; lowered by validated wins / the solver)
   pinned      INTEGER NOT NULL DEFAULT 0,-- admin "feature this first" flag
   sort_order  INTEGER NOT NULL DEFAULT 0,-- admin ordering among pinned puzzles
   full_optimal INTEGER,                  -- full solver (BFS) optimal roll count
@@ -260,14 +260,26 @@ export class Db {
   // the unique name, so re-running never duplicates and never disturbs admin
   // ordering or attempt history. New catalogue entries are appended.
   seedCatalog() {
+    // `optimal` starts at the scramble depth: the stored reverse-scramble is a
+    // genuine known solve of exactly that length. It only ever goes down from
+    // there (validated wins, the admin solver) — never from raw client claims.
     const insert = this.db.prepare(
-      `INSERT OR IGNORE INTO puzzles (name, seed, num_cubes, scramble, par, sort_order, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO puzzles (name, seed, num_cubes, scramble, par, optimal, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const ts = now();
     for (const p of buildCatalog()) {
-      insert.run(p.name, p.seed, p.numCubes, p.scramble, p.par, p.order, ts);
+      insert.run(p.name, p.seed, p.numCubes, p.scramble, p.par, p.scramble, p.order, ts);
     }
+    // Repair pass for DBs written before `optimal` was server-derived: a null,
+    // an impossible value below the BFS-proven floor, or one above the
+    // always-available scramble-length solution is reset to the safe baseline.
+    this.db.prepare(
+      `UPDATE puzzles SET optimal = scramble
+        WHERE optimal IS NULL
+           OR optimal > scramble
+           OR (full_optimal IS NOT NULL AND optimal < full_optimal)`
+    ).run();
   }
 
   puzzleById(id) {
@@ -298,13 +310,14 @@ export class Db {
     return this._puzzleMeta(this.puzzleByName(name));
   }
 
-  // Record a better optimal (shortest known solve) for a puzzle. The value is
-  // client-supplied, so it is also sanity-checked here: it must be a positive
-  // integer no greater than the puzzle's par, or it is silently ignored.
+  // Record a better optimal (shortest known solve) for a puzzle. Called only
+  // for validated wins, but re-checks the bounds anyway: a positive integer,
+  // no greater than par, and never below the BFS-proven floor when known.
   recordOptimal(puzzleId, optimal) {
     if (!Number.isInteger(optimal) || optimal < 1) return;
     const row = this.puzzleById(puzzleId);
     if (!row || optimal > row.par) return;
+    if (row.full_optimal != null && optimal < row.full_optimal) return;
     this.db.prepare(
       "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
     ).run(optimal, puzzleId, optimal);
@@ -332,6 +345,13 @@ export class Db {
     this.db.prepare(
       "UPDATE puzzles SET full_optimal = ?, beam_moves = ?, min_beam_width = ?, color_beams = ?, solved_at = ? WHERE id = ?"
     ).run(r.bfs ?? null, r.beam ?? null, r.searchWidth ?? null, JSON.stringify(r.colorBeams) ?? null, ts, puzzleId);
+    // A solver solution is a known solve, so it can lower `optimal` too.
+    const known = r.bfs ?? r.beam;
+    if (known != null) {
+      this.db.prepare(
+        "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
+      ).run(known, puzzleId, known);
+    }
     return {
       fullOptimal: r.bfs ?? null, beamMoves: r.beam ?? null,
       minBeamWidth: r.searchWidth ?? null, colorBeams: r.colorBeams ?? null, solvedAt: ts,

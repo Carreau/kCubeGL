@@ -358,6 +358,7 @@ const game = {
   // Backend attempt tracking (resilient — null/0 while the server is unreachable).
   attemptId: null, // id of the in-progress attempt on the server
   attemptGen: 0, // bumped per beginAttempt so late responses for an old board are ignored
+  levelGen: 0, // bumped per startLevel so an overlapping (slow) startLevel can't finish late
   attemptStart: 0, // performance.now() when the attempt began (for duration)
   username: null, // logged-in player name, if any (shown in the HUD)
 };
@@ -662,7 +663,9 @@ function tryImproveWithSolver() {
     }
   }
 
-  const greedy = greedySolve(solverState);
+  // Pass the player's chosen win colour: without it greedy can "improve" the
+  // solution into one that solves to the wrong uniform colour.
+  const greedy = greedySolve(solverState, { targetColor: game.winColor });
   if (greedy && greedy.length < game.solution.length) {
     game.solution = solverSolutionToGame(greedy);
   }
@@ -826,10 +829,7 @@ function beginAttempt(puzzleInfo = null) {
   // the old attempt's id must not be installed onto the new board. Capture the
   // generation now and ignore (best-effort abandon) any stale resolution.
   const gen = ++game.attemptGen;
-  api.startAttempt({
-    puzzle: game.puzzleName,
-    optimal: game.optimal,
-  }).then((r) => {
+  api.startAttempt({ puzzle: game.puzzleName }).then((r) => {
     if (!r || !r.attemptId) return;
     if (gen !== game.attemptGen) {
       // A newer board took over while this request was in flight — close the
@@ -894,6 +894,7 @@ function nextPuzzleName() {
 async function startLevel(name) {
   finalizeAttempt("abandoned"); // close a prior open attempt (old movesUsed) first
   game.puzzleName = name;
+  const gen = ++game.levelGen;
   hideOverlay();
 
   // One request serves two purposes: derive the puzzle config (seed + params)
@@ -901,6 +902,10 @@ async function startLevel(name) {
   // Falls back to the deterministic catalogue (cold-start cache) when the server
   // is briefly unreachable.
   const puzzleInfo = await api.getPuzzle(name);
+  // A newer startLevel took over while this request was in flight: bail before
+  // building, or this stale continuation would render board A while attempts
+  // are reported against the newer game.puzzleName.
+  if (gen !== game.levelGen) return;
   const cached = catalogByName(name);
   const config = (puzzleInfo && puzzleInfo.seed != null)
     ? { seed: puzzleInfo.seed, numCubes: puzzleInfo.numCubes, scramble: puzzleInfo.scramble, par: puzzleInfo.par }

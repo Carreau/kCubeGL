@@ -106,9 +106,15 @@ function safeEqual(a, b) {
 const trustProxy = () =>
   process.env.KCUBE_TRUST_PROXY === "1" || process.env.KCUBE_TRUST_PROXY === "true";
 
-// X-Forwarded-* headers can be comma-separated lists (one entry per proxy hop);
-// only the first (client-nearest) entry is meaningful.
+// X-Forwarded-Host/Proto are typically SET (replaced) by the proxy, so the
+// first entry is the meaningful one when several hops each add their own.
 const firstForwarded = (v) => String(v).split(',')[0].trim();
+
+// X-Forwarded-For is APPENDED to by each proxy hop, so earlier entries are
+// whatever the client claimed they were. The only trustworthy entry is the
+// LAST one — the address our own trusted proxy saw and appended. Using the
+// first entry would let a client spoof arbitrary "IPs" past the rate limiter.
+const lastForwarded = (v) => String(v).split(',').pop().trim();
 
 function fwdHost(req) {
   const fwd = trustProxy() && req.headers['x-forwarded-host'];
@@ -166,7 +172,7 @@ const rateMax = (def) => {
 
 function clientIp(req) {
   if (trustProxy() && req.headers["x-forwarded-for"]) {
-    return firstForwarded(req.headers["x-forwarded-for"]);
+    return lastForwarded(req.headers["x-forwarded-for"]) || "unknown";
   }
   return (req.socket && req.socket.remoteAddress) || "unknown";
 }
@@ -360,17 +366,16 @@ const ROUTES = [
     });
   } },
 
-  // POST /api/attempts  { puzzle, optimal }
+  // POST /api/attempts  { puzzle }
+  // Note: a client-supplied `optimal` used to be accepted here, but anyone can
+  // register a token, so that let any visitor permanently poison a puzzle's
+  // shortest-known-solve. `optimal` is now seeded from the generator's solution
+  // length and only ever lowered by validated wins (see the PATCH handler).
   { method: "POST", path: "/api/attempts", auth: "user", body: true, handler({ res, db, body, user }) {
     const name = cleanName(body.puzzle);
     if (!name) return sendJson(res, 400, { error: "bad puzzle" });
     const puzzle = db.puzzleByName(name);
     if (!puzzle) return sendJson(res, 404, { error: "no such puzzle" });
-    // `optimal` is client-supplied: accept only a plausible value (a positive
-    // integer no greater than the puzzle's par) so nobody can poison the
-    // shortest-known-solve with 1 or a negative number. Ignore the rest.
-    const opt = toInt(body.optimal);
-    if (opt != null && opt >= 1 && opt <= puzzle.par) db.recordOptimal(puzzle.id, opt);
     return sendJson(res, 201, { attemptId: db.startAttempt(user.id, puzzle.id) });
   } },
 
@@ -412,6 +417,10 @@ const ROUTES = [
     }
     const prevBest = db.userBest(user.id, puzzleId); // before recording this outcome
     db.finishAttempt(id, user.id, { outcome: body.outcome, movesUsed, durationMs, moveSeq });
+    // A validated win is the only client input allowed to improve the
+    // shortest-known-solve (recordOptimal re-checks the bounds, incl. the
+    // BFS-proven floor when known).
+    if (body.outcome === "won") db.recordOptimal(puzzleId, movesUsed);
     return sendJson(res, 200, {
       best: db.userBest(user.id, puzzleId),
       worldBest: db.worldBest(puzzleId),

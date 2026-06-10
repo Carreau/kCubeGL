@@ -142,12 +142,14 @@ export function bfsSolve(initialState, { maxDepth = 20, maxNodes = 60000, target
 /* --- Beam search (approximate, tight upper bound) ----------------------------- */
 
 // An admissible-style progress measure for a state (lower = closer to solved):
-// how many cubes are NOT showing the most-common top colour, plus how many extra
+// how many cubes are NOT showing the goal top colour (the required targetColor
+// when one is set, otherwise the most-common one), plus how many extra
 // disconnected islands remain. Used to rank beam-search candidates.
-function remainingEstimate(state) {
+function remainingEstimate(state, targetColor = null) {
   const counts = new Array(6).fill(0);
   for (const c of state.cubes) counts[topColor(c)]++;
-  const colorGap = state.cubes.length - Math.max(...counts);
+  const colorGap = state.cubes.length -
+    (targetColor != null ? counts[targetColor] : Math.max(...counts));
 
   const seen = new Set();
   let components = 0;
@@ -200,11 +202,14 @@ export function beamSolve(initialState, { width = 300, maxDepth = 80, targetColo
       }
     }
     if (!children.length) return null;
-    // Keep only the most promising `width` states for the next layer. The sort is
-    // stable in V8, so ties resolve by insertion order — keeping this solver
-    // deterministic, which matters for reproducible difficulty values.
-    children.sort((a, b) => remainingEstimate(nodes[a].state) - remainingEstimate(nodes[b].state));
-    frontier = children.slice(0, width);
+    // Keep only the most promising `width` states for the next layer. Scores are
+    // computed once per child (remainingEstimate walks every island), not inside
+    // the comparator. Array.prototype.sort is spec-guaranteed stable (ES2019),
+    // so ties resolve by insertion order — keeping this solver deterministic,
+    // which matters for reproducible difficulty values.
+    const score = children.map((i) => remainingEstimate(nodes[i].state, targetColor));
+    const order = children.map((_, k) => k).sort((a, b) => score[a] - score[b]);
+    frontier = order.slice(0, width).map((k) => children[k]);
   }
   return null;
 }
@@ -341,10 +346,10 @@ function mergeStep(state, targetColor) {
 //     commitment and try another.
 //
 // Returns [{id, dir}, …] or null.
-export function greedySolve(initialState, { maxMoves = 300 } = {}) {
+export function greedySolve(initialState, { maxMoves = 300, targetColor: wanted = null } = {}) {
   let state = initialState;
   const allMoves = [];
-  const targetColor = pickTargetColor(state.cubes);
+  const targetColor = wanted ?? pickTargetColor(state.cubes);
   let committedId = null;
   let lastDir = null;
   const visited = new Set([stateKey(state)]);
