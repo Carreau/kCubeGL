@@ -29,7 +29,7 @@ try {
 
   // --- Landing page: grid renders, and we can sign in. ---
   await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
-  await page.waitForSelector(".card", { timeout: 15000 });
+  await page.waitForSelector(".puzzle-row", { timeout: 15000 });
 
   // Navigate to the login page and register. The post-register step offers a
   // passkey only when one can actually be created (secure context + a platform
@@ -47,8 +47,8 @@ try {
   if (!/tester/.test(who)) fail(`expected to be signed in as tester, saw "${who}"`);
 
   // --- Open the first puzzle and play. ---
-  const firstName = await page.$eval(".card", (e) => e.getAttribute("data-name"));
-  await page.click(`.card[data-name="${firstName}"]`);
+  const firstName = await page.$eval(".puzzle-row", (e) => e.getAttribute("data-name"));
+  await page.click(`.puzzle-row[data-name="${firstName}"]`);
   await page.waitForURL(/play\.html\?puzzle=/, { timeout: 10000 });
   // Wait on a real readiness signal instead of a fixed sleep: the moves HUD
   // starts at "0" in the HTML and is set to the level's move budget (> 0) once
