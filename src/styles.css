@@ -957,7 +957,8 @@ body.auth-page {
 .puzzle-tr.drop-target td:first-child { box-shadow: inset 0 2px 0 var(--accent); }
 .drag-hint { font-size: 11px; margin: 0 0 4px; }
 
-/* Per-colour beam chips in the puzzle table. */
+/* Per-colour chips in the puzzle tables (landing: your best per colour;
+   admin: beam-search count per colour). */
 .cb-cell { text-align: center; padding: 4px 3px; min-width: 30px; }
 .puzzle-table th.cb-cell { text-align: center; }
 .cb-header-dot {

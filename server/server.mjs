@@ -449,6 +449,9 @@ const ROUTES = [
     // if the sequence is legal, ends solved, and its paid roll count matches
     // movesUsed exactly. A truncated sequence can't be verified, so a path
     // past the cap rejects the win rather than silently storing a corrupt one.
+    // The verified win's top colour (0-5), recorded so the landing page can
+    // break a player's bests down per colour. Stays null for non-wins.
+    let winColor = null;
     if (body.outcome === "won") {
       const mu = toInt(body.movesUsed);
       if (mu == null || mu < 1) return sendJson(res, 400, { error: "bad movesUsed for a win" });
@@ -459,9 +462,10 @@ const ROUTES = [
       if (!replay || !replay.won || replay.rolls !== mu) {
         return sendJson(res, 400, { error: "move sequence does not replay to that win" });
       }
+      winColor = replay.color;
     }
     const prevBest = db.userBest(user.id, puzzleId); // before recording this outcome
-    db.finishAttempt(id, user.id, { outcome: body.outcome, movesUsed, durationMs, moveSeq });
+    db.finishAttempt(id, user.id, { outcome: body.outcome, movesUsed, durationMs, moveSeq, winColor });
     // A replay-verified win is the only client input allowed to improve the
     // shortest-known-solve (recordOptimal re-checks the bounds anyway).
     if (body.outcome === "won") db.recordOptimal(puzzleId, movesUsed);
