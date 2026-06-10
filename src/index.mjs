@@ -161,28 +161,72 @@ async function loadGrid() {
   renderGrid();
 }
 
-// One puzzle card.
-function cardHtml(p) {
+// Colour palette matching FACE_AXES order (0=white … 5=green).
+const COLOR_META = [
+  { label: "white",  hex: "#d0d4de", dark: true  },
+  { label: "yellow", hex: "#ffd23f", dark: true  },
+  { label: "red",    hex: "#e5484d", dark: false },
+  { label: "orange", hex: "#ff7a1a", dark: false },
+  { label: "blue",   hex: "#3aa0ff", dark: false },
+  { label: "green",  hex: "#3ecf6b", dark: true  },
+];
+
+function colorCell(colorBeams, i) {
+  const cm = COLOR_META[i];
+  const v = colorBeams ? colorBeams[i] : null;
+  if (v == null) {
+    return `<td class="cb-cell"><span class="cb-chip cb-unsolved" title="beam not run for ${cm.label}">–</span></td>`;
+  }
+  const txtClass = cm.dark ? "cb-dark" : "cb-light";
+  return `<td class="cb-cell"><span class="cb-chip ${txtClass}" style="background:${cm.hex}" title="beam moves — ${cm.label} target">${v}</span></td>`;
+}
+
+// One puzzle list row.
+function rowHtml(p) {
   const solved = p.yourBest != null;
-  const over = overScramble(p);
+  const colorCells = COLOR_META.map((_, i) => colorCell(p.colorBeams, i)).join("");
   return (
-    `<div class="card${solved ? " solved" : ""}" data-name="${esc(p.name)}" tabindex="0" role="button">` +
-      `<div class="card-top"><span class="lvl">${esc(p.name)}</span>` +
-      (p.pinned ? `<span class="pin-badge" title="featured">★</span>` : "") +
-      `<span class="dot" title="${solved ? "solved" : "unsolved"}"></span></div>` +
-      `<div class="card-mid muted">${p.numCubes} cubes · par ${p.par}` +
-      (p.minBeamWidth != null ? ` · effort <span class="effort-val">w${p.minBeamWidth}</span>` : "") +
-      `</div>` +
-      `<div class="card-stats">` +
-        `<span>you <b>${dash(p.yourBest)}</b></span>` +
-        `<span>world <b>${dash(p.worldBest)}</b></span>` +
-        (p.attempts ? `<span class="muted" title="failure rate across all players">${pct(p.failRate)} fail</span>` : "") +
-        (over != null ? `<span class="muted" title="world best over scramble length">+${over} over</span>` : "") +
-      `</div>` +
-      `<div class="card-actions">` +
-        `<span class="play-hint">Play ▸</span>` +
-        `<button class="lb-btn link-btn" type="button" data-name="${esc(p.name)}">Leaderboard</button>` +
-      `</div>` +
+    `<tr class="puzzle-row${solved ? " solved" : ""}" data-name="${esc(p.name)}" tabindex="0">` +
+    `<td class="pl-dot-cell"><span class="row-dot${solved ? " row-dot-solved" : ""}" title="${solved ? "solved" : "unsolved"}"></span></td>` +
+    `<td class="pl-name-cell">${esc(p.name)}${p.pinned ? ` <span class="pin-badge" title="featured">★</span>` : ""}</td>` +
+    `<td class="pl-num-cell">${p.numCubes}</td>` +
+    `<td class="pl-num-cell">${p.par}</td>` +
+    `<td class="pl-num-cell">${p.minBeamWidth != null ? `<span class="effort-val">w${p.minBeamWidth}</span>` : `<span class="muted">–</span>`}</td>` +
+    `<td class="pl-num-cell">${p.attempts ? pct(p.failRate) : `<span class="muted">–</span>`}</td>` +
+    `<td class="pl-num-cell">${dash(p.worldBest)}</td>` +
+    `<td class="pl-num-cell">${dash(p.yourBest)}</td>` +
+    colorCells +
+    `<td class="pl-act-cell">` +
+      `<span class="play-hint">Play ▸</span>` +
+      `<button class="lb-btn link-btn" type="button" data-name="${esc(p.name)}">Scores</button>` +
+    `</td>` +
+    `</tr>`
+  );
+}
+
+const COLOR_HEADS = COLOR_META.map(
+  (cm) => `<th class="cb-cell" title="beam moves — ${cm.label} target">` +
+    `<span class="cb-header-dot" style="background:${cm.hex}"></span></th>`
+).join("");
+
+function tableHtml(items) {
+  return (
+    `<div class="puzzle-list-wrap">` +
+    `<table class="puzzle-list">` +
+    `<thead><tr>` +
+    `<th class="pl-dot-col" aria-label="Solved"></th>` +
+    `<th class="pl-name-col">Name</th>` +
+    `<th class="pl-num-col">Cubes</th>` +
+    `<th class="pl-num-col">Par</th>` +
+    `<th class="pl-num-col">Effort</th>` +
+    `<th class="pl-num-col">Fail&nbsp;%</th>` +
+    `<th class="pl-num-col">World</th>` +
+    `<th class="pl-num-col">You</th>` +
+    COLOR_HEADS +
+    `<th class="pl-act-col"></th>` +
+    `</tr></thead>` +
+    `<tbody>${items.map(rowHtml).join("")}</tbody>` +
+    `</table>` +
     `</div>`
   );
 }
@@ -216,8 +260,7 @@ function renderGrid() {
   const others = state.puzzles.filter((p) => !p.pinned);
 
   if (pinned.length === 0) {
-    grid.classList.remove("grouped");
-    grid.innerHTML = sortGroup(others).map(cardHtml).join("");
+    grid.innerHTML = tableHtml(sortGroup(others));
     return;
   }
 
@@ -225,10 +268,9 @@ function renderGrid() {
     `<section class="level-group">` +
       `<h3 class="group-head">${title}<span class="muted group-count">${items.length}</span>` +
       (hint ? `<span class="muted group-hint">${hint}</span>` : "") + `</h3>` +
-      `<div class="grid">${items.map(cardHtml).join("")}</div>` +
+      tableHtml(items) +
     `</section>`;
 
-  grid.classList.add("grouped");
   grid.innerHTML =
     group(`<span class="pin-badge">★</span> Featured`, "hand-picked", sortGroup(pinned)) +
     group("All puzzles", "", sortGroup(others));
@@ -236,20 +278,19 @@ function renderGrid() {
 
 function go(name) { location.href = `play.html?puzzle=${encodeURIComponent(name)}`; }
 
-// Delegated grid clicks: the Leaderboard button opens the detail; anything else
-// on a card starts that puzzle.
+// Delegated grid clicks: the Scores button opens the detail; anything else
+// on a row starts that puzzle.
 $("grid").addEventListener("click", (e) => {
   const lb = e.target.closest(".lb-btn");
   if (lb) { openDetail(lb.dataset.name); return; }
-  const card = e.target.closest(".card");
-  if (card) go(card.dataset.name);
+  const row = e.target.closest(".puzzle-row");
+  if (row) go(row.dataset.name);
 });
 $("grid").addEventListener("keydown", (e) => {
   if (e.key !== "Enter" && e.key !== " ") return;
-  // Let Enter/Space on the Leaderboard button be a button press, not card nav.
   if (e.target.closest(".lb-btn")) return;
-  const card = e.target.closest(".card");
-  if (card) { e.preventDefault(); go(card.dataset.name); }
+  const row = e.target.closest(".puzzle-row");
+  if (row) { e.preventDefault(); go(row.dataset.name); }
 });
 
 /* --- per-puzzle detail (leaderboard + difficulty) --------------------------- */
