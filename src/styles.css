@@ -642,14 +642,6 @@ table.lb .avatar { margin-right: 6px; }
 .sort-chip .sort-dir { font-size: 11px; margin-left: 2px; }
 .sort-chip:not(.active) .sort-dir { display: none; }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 14px;
-}
-/* When the catalogue is split into Featured / All groups, #grid stacks the
-   groups vertically while each group keeps its own card grid. */
-.grid.grouped { display: block; }
 .level-group + .level-group { margin-top: 28px; }
 .group-head {
   display: flex;
@@ -670,31 +662,49 @@ table.lb .avatar { margin-right: 6px; }
   letter-spacing: 0;
 }
 .group-head .group-hint { font-size: 11px; text-transform: none; letter-spacing: 0; margin-left: auto; }
-.card {
-  background: var(--g04);
-  border: 1px solid var(--g10);
-  border-radius: 16px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  cursor: pointer;
-  transition: transform 0.1s ease, border-color 0.15s ease, background 0.15s ease;
+
+/* Puzzle list view */
+.puzzle-list-wrap { overflow-x: auto; }
+.puzzle-list {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
 }
-.card:hover { transform: translateY(-2px); border-color: var(--tint-hv-bd); background: var(--tint-hv); }
-.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.card.solved { border-color: rgba(62, 207, 107, 0.35); }
-.card-top { display: flex; align-items: center; gap: 6px; }
-.card-top .lvl { font-weight: 700; font-size: 16px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.card-top .pin-badge { color: var(--accent); font-size: 13px; }
-.card-top .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--g18); margin-left: auto; }
-.card.solved .dot { background: #3ecf6b; box-shadow: 0 0 8px rgba(62, 207, 107, 0.6); }
-.card-mid { font-size: 12px; }
+.puzzle-list thead th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--g10);
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+.puzzle-list th.pl-num-col,
+.puzzle-list th.pl-act-col { text-align: right; }
+.puzzle-list td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--g05);
+  vertical-align: middle;
+}
+.puzzle-row { cursor: pointer; }
+.puzzle-row:hover td { background: var(--tint-hv); }
+.puzzle-row:focus-visible td { background: var(--tint); }
+.pl-dot-cell { width: 28px; padding-right: 2px !important; }
+.row-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--g18);
+  vertical-align: middle;
+}
+.row-dot.row-dot-solved { background: #3ecf6b; box-shadow: 0 0 8px rgba(62, 207, 107, 0.6); }
+.pl-name-cell { font-weight: 600; min-width: 150px; }
+.pl-num-cell { text-align: right; color: var(--muted); white-space: nowrap; }
+.pl-act-cell { text-align: right; white-space: nowrap; }
 .effort-val { color: #ffb454; font-weight: 600; }
-.card-stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
-.card-stats b { color: var(--ink); }
-.card-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
-.play-hint { color: var(--accent); font-size: 13px; font-weight: 600; }
+.play-hint { color: var(--accent); font-size: 13px; font-weight: 600; margin-right: 8px; }
 .lb-btn { padding: 4px 10px; font-size: 12px; }
 
 /* per-level detail dialog */
