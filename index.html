@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>kCube — levels</title>
   <link rel="stylesheet" href="src/styles.css" />
+  <script>(function(){var t=localStorage.getItem('kcube.theme')||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');document.documentElement.setAttribute('data-theme',t);})()</script>
 </head>
 <body class="landing-page">
   <header class="site-head">
@@ -12,8 +13,11 @@
       <span class="logo">kCube</span>
       <span class="tag">roll-to-match puzzle</span>
     </div>
-    <!-- Account widget — filled in by src/index.mjs (login / who-am-I / sign out) -->
-    <div id="account" class="account"></div>
+    <div class="head-right">
+      <button id="themeBtn" type="button" class="link-btn">Light</button>
+      <!-- Account widget — filled in by src/index.mjs (login / who-am-I / sign out) -->
+      <div id="account" class="account"></div>
+    </div>
   </header>
 
   <main class="landing">

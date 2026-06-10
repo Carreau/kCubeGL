@@ -1,5 +1,6 @@
 import * as api from './api.mjs';
 import { gravatarUrl, gravatarUrlForHash } from './shared.mjs';
+import { initTheme, bindThemeBtn } from './theme.mjs';
 
 const $ = (id) => document.getElementById(id);
 
@@ -71,4 +72,7 @@ async function boot() {
   $('clearBtn').addEventListener('click', clear);
 }
 
+initTheme();
+const themeBtn = document.getElementById('themeBtn');
+if (themeBtn) bindThemeBtn(themeBtn);
 boot();

@@ -7,6 +7,7 @@ import {
 } from "./level-gen.mjs";
 import * as api from "./api.mjs";
 import { bfsSolve, greedySolve, ROLL_DR, ROLL_DC } from "./solver.mjs";
+import { initTheme, bindThemeBtn } from "./theme.mjs";
 
 /* ============================================================================
  * kCube — a 3D dice-rolling puzzle.
@@ -190,6 +191,13 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const CLEAR_DARK = 0x0b0d14;
+const CLEAR_LIGHT = 0xc6d4e8;
+renderer.setClearColor(initTheme() === 'light' ? CLEAR_LIGHT : CLEAR_DARK);
+document.addEventListener('themechange', ({ detail }) => {
+  renderer.setClearColor(detail.theme === 'light' ? CLEAR_LIGHT : CLEAR_DARK);
+});
 
 const scene = new THREE.Scene();
 
@@ -930,6 +938,8 @@ function goToLevels() {
 
 el.btn.addEventListener("click", overlayAction);
 el.solveBtn.addEventListener("click", () => { showSolution(); el.solveBtn.blur(); });
+const themeBtnEl = document.getElementById('themeBtn');
+if (themeBtnEl) bindThemeBtn(themeBtnEl);
 el.menuBtn.addEventListener("click", () => { if (!game.solving) goToLevels(); el.menuBtn.blur(); });
 el.infoBtn.addEventListener("click", () => { el.infoPanel.classList.remove("hidden"); el.infoBtn.blur(); });
 el.infoCloseBtn.addEventListener("click", () => { el.infoPanel.classList.add("hidden"); });

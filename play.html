@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
   <title>kCube — play</title>
   <link rel="stylesheet" href="src/styles.css" />
+  <script>(function(){var t=localStorage.getItem('kcube.theme')||(matchMedia('(prefers-color-scheme:light)').matches?'light':'dark');document.documentElement.setAttribute('data-theme',t);})()</script>
   <!-- Three.js loaded as an ES module from a CDN (runs in the player's browser) -->
   <script type="importmap">
   {
@@ -22,6 +23,7 @@
     <!-- Top-left: back to the level picker + who's playing -->
     <div id="topbar">
       <a class="link-btn" href="index.html">← Puzzles</a>
+      <button id="themeBtn" type="button" class="link-btn">Light</button>
       <span class="who">playing as
         <img id="userAvatar" class="avatar" alt="" width="18" height="18"
           referrerpolicy="no-referrer" hidden onerror="this.hidden=true">

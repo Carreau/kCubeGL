@@ -15,6 +15,7 @@
 
 import * as api from "./api.mjs";
 import { buildCatalog, gravatarUrl, gravatarUrlForHash } from "./shared.mjs";
+import { initTheme, bindThemeBtn } from "./theme.mjs";
 
 const LOCAL_KEY = "kcube.v1"; // same store the game writes best scores to
 
@@ -352,4 +353,7 @@ async function boot() {
   await Promise.all([loadGrid(), renderMyStats()]);
 }
 
+initTheme();
+const themeBtn = document.getElementById('themeBtn');
+if (themeBtn) bindThemeBtn(themeBtn);
 boot();
