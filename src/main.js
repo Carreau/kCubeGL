@@ -93,16 +93,39 @@ const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2)
 
 // Per-theme scene colours. The board stays a neutral tone (never hinting at the
 // target colour); the face-texture background is the seam colour between cubes.
+// `sheen` is the alpha of the white top-gradient on each face — it desaturates
+// the very colour the player must read, so the light theme keeps it minimal.
+// `key`/`fill` tune the lights: the light theme needs a stronger key and a
+// near-neutral fill, or warm faces (red/orange/yellow) drift toward brick/mustard.
 const SCENE_THEME = {
-  dark:  { clear: 0x0b0d14, base: 0x161a26, tileA: 0x2a3145, tileB: 0x222838, faceBg: "#0c0e16" },
-  // faceBg stays a medium slate (not near-white) so the white cube face keeps a
-  // visible rounded border instead of dissolving into a pale seam.
-  light: { clear: 0xc6d4e8, base: 0xd2dcec, tileA: 0xe6edf7, tileB: 0xd8e2f0, faceBg: "#8b97ad" },
+  dark: {
+    clear: 0x0b0d14, base: 0x161a26, tileA: 0x313952, tileB: 0x222838, faceBg: "#0c0e16",
+    sheen: 0.18, key: 1.15, fill: 0x88aaff, fillIntensity: 0.35,
+  },
+  light: {
+    clear: 0xdce4f0, base: 0xc3ccdc, tileA: 0xedf1f8, tileB: 0xdfe6f0,
+    // A dark slate seam frames each colour chip (same mechanism that makes the
+    // dark theme legible) and keeps the white face unambiguous on a pale board.
+    faceBg: "#475066",
+    sheen: 0.10, key: 1.3, fill: 0xdfe8ff, fillIntensity: 0.3,
+    // Brighter, more saturated face set: MeshStandardMaterial under ~1.7 total
+    // light darkens colours, so the shared COLORS read muted on a pale scene.
+    faces: {
+      white: 0xffffff, yellow: 0xffe838, red: 0xe8323c,
+      orange: 0xff8a1f, blue: 0x2f8fff, green: 0x2dc965,
+    },
+  },
 };
+
+// The 3D-face hex for a colour in a theme: the light theme overrides the shared
+// COLORS with a punchier set; HUD swatches keep using COLORS everywhere.
+function faceHex(colorIdx, t) {
+  return (t.faces && t.faces[COLORS[colorIdx].name]) ?? COLORS[colorIdx].hex;
+}
 
 // Build a canvas texture: a coloured rounded square on a themed background, so
 // faces read clearly and adjacent cubes still show a seam between them.
-function faceTexture(hex, bg = SCENE_THEME.dark.faceBg) {
+function faceTexture(hex, bg = SCENE_THEME.dark.faceBg, sheen = SCENE_THEME.dark.sheen) {
   const size = 128;
   const cv = document.createElement("canvas");
   cv.width = cv.height = size;
@@ -117,7 +140,7 @@ function faceTexture(hex, bg = SCENE_THEME.dark.faceBg) {
   ctx.fill();
   // subtle top sheen
   const grad = ctx.createLinearGradient(0, pad, 0, pad + w);
-  grad.addColorStop(0, "rgba(255,255,255,0.22)");
+  grad.addColorStop(0, `rgba(255,255,255,${sheen})`);
   grad.addColorStop(0.5, "rgba(255,255,255,0)");
   ctx.fillStyle = grad;
   ctx.beginPath();
@@ -133,11 +156,14 @@ function faceTexture(hex, bg = SCENE_THEME.dark.faceBg) {
 // All cubes share this material array, so rebuilding each map on a theme change
 // (see applySceneTheme) recolours every cube's face seams at once.
 const FACE_MATERIALS = FACE_AXES.map(
-  (f) => new THREE.MeshStandardMaterial({
-    map: faceTexture(COLORS[f.color].hex, SCENE_THEME[initTheme()].faceBg),
-    roughness: 0.55,
-    metalness: 0.05,
-  })
+  (f) => {
+    const t = SCENE_THEME[initTheme()] || SCENE_THEME.dark;
+    return new THREE.MeshStandardMaterial({
+      map: faceTexture(faceHex(f.color, t), t.faceBg, t.sheen),
+      roughness: 0.55,
+      metalness: 0.05,
+    });
+  }
 );
 
 // Which colour faces up for a given orientation quaternion. quatToFaces returns
@@ -230,9 +256,9 @@ function applyCamera() {
 }
 applyCamera();
 
-// Lights
+// Lights (key intensity and fill colour are per-theme; see applySceneTheme)
 scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-const key = new THREE.DirectionalLight(0xffffff, 1.15);
+const key = new THREE.DirectionalLight(0xffffff, SCENE_THEME[initTheme()].key);
 key.position.set(4, 9, 5);
 key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048);
@@ -243,7 +269,8 @@ key.shadow.camera.right = 6;
 key.shadow.camera.top = 6;
 key.shadow.camera.bottom = -6;
 scene.add(key);
-const fill = new THREE.DirectionalLight(0x88aaff, 0.35);
+const fill = new THREE.DirectionalLight(
+  SCENE_THEME[initTheme()].fill, SCENE_THEME[initTheme()].fillIntensity);
 fill.position.set(-5, 4, -4);
 scene.add(fill);
 
@@ -286,11 +313,14 @@ function applySceneTheme(theme) {
   const t = SCENE_THEME[theme] || SCENE_THEME.dark;
   renderer.setClearColor(t.clear);
   baseMat.color.set(t.base);
+  key.intensity = t.key;
+  fill.color.set(t.fill);
+  fill.intensity = t.fillIntensity;
   for (const { mat, dark } of tileMats) mat.color.set(dark ? t.tileB : t.tileA);
   FACE_AXES.forEach((f, i) => {
     const mat = FACE_MATERIALS[i];
     mat.map?.dispose();
-    mat.map = faceTexture(COLORS[f.color].hex, t.faceBg);
+    mat.map = faceTexture(faceHex(f.color, t), t.faceBg, t.sheen);
     mat.needsUpdate = true;
   });
 }
