@@ -11,7 +11,8 @@
     "start": "node --disable-warning=ExperimentalWarning server/server.mjs",
     "dev": "python3 -m http.server 8080",
     "check": "for f in src/*.js src/*.mjs server/*.mjs test/*.mjs; do node --check \"$f\" || exit 1; done",
-    "test": "npm run test:api && npm run test:smoke",
+    "test": "npm run test:unit && npm run test:api && npm run test:smoke",
+    "test:unit": "node --disable-warning=ExperimentalWarning test/unit.mjs",
     "test:api": "node --disable-warning=ExperimentalWarning test/api.mjs",
     "test:smoke": "node test/smoke.mjs"
   },
