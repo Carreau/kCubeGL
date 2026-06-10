@@ -111,19 +111,27 @@ required today — though one can be added if the project grows to need it.
 ```
 index.html         landing page: puzzle catalogue + difficulty sort, leaderboards
 play.html          the game page (import map for Three.js) + HUD/overlay
-login.html         sign-in / account page: username + passkey (WebAuthn) login
+login.html         sign-in / account page: username + password + passkey login
 admin.html         admin page: user management + featured-puzzle pin/order
+settings.html      account settings (Gravatar email — only its hash is stored)
 src/index.mjs      landing-page logic (catalogue grid, sorting, account, detail)
-src/login.mjs      sign-in logic (username registration + passkey ceremonies)
-src/admin.mjs      admin-page logic (users + puzzle pin/order)
+src/login.mjs      sign-in logic (username registration + password/passkey login)
+src/admin.mjs      admin-page logic (users + puzzle pin/order + solver step)
+src/settings.mjs   settings-page logic (set/clear the Gravatar email)
 src/main.js        game logic, rendering and roll animation (renders generateLevel)
 src/level-gen.mjs  pure board generation: seeded scramble + quaternion/connectivity
+src/solver.mjs     pure-state solvers: BFS (optimal), greedy, beam + search-effort probe
+src/catalog-solve.mjs adapter: reproduce a catalogue board + run the solvers
 src/api.mjs        resilient browser client for the backend API
 src/shared.mjs     dependency-free puzzle catalogue + math shared by game + server
+src/ui.mjs         browser-only DOM + formatting helpers shared by the pages
+src/theme.mjs      light/dark theme toggle (per-page pre-paint via theme-init.js)
 src/styles.css     HUD, landing page, admin and overlay styling
 server/server.mjs  HTTP server: static files + JSON API (node:http)
 server/db.mjs      SQLite data layer + analytics queries (node:sqlite)
 server/webauthn.mjs WebAuthn/passkey helpers (challenge + verify)
+server/password.mjs scrypt password hashing (node:crypto, constant-time verify)
+test/unit.mjs      pure-logic unit tests (catalogue determinism, engine, solvers)
 test/api.mjs       backend API integration test (no browser)
 test/smoke.mjs     end-to-end smoke test (Playwright, headless browser)
 ```

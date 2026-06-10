@@ -23,16 +23,16 @@
  * ========================================================================== */
 
 import { DatabaseSync } from "node:sqlite";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { buildCatalog, gravatarHash } from "../src/shared.mjs";
-import { solveCatalogPuzzle } from "../src/catalog-solve.mjs";
+import { solveCatalogPuzzle, replayMoves } from "../src/catalog-solve.mjs";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id             INTEGER PRIMARY KEY,
   username       TEXT NOT NULL,
   username_lower TEXT NOT NULL UNIQUE,   -- case-insensitive uniqueness
-  token          TEXT NOT NULL UNIQUE,   -- bearer token (this app's only secret)
+  token          TEXT NOT NULL UNIQUE,   -- sha256 of the bearer token (never the token itself)
   created_at     INTEGER NOT NULL,
   is_admin       INTEGER NOT NULL DEFAULT 0,
   -- Gravatar hash derived from the player's email. We hash the email and keep
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS puzzles (
   num_cubes   INTEGER NOT NULL,
   scramble    INTEGER NOT NULL,          -- generation depth ≈ shortest solve
   par         INTEGER NOT NULL,          -- bonus-free move budget
-  optimal     INTEGER,                   -- shortest known solve (client-reported)
+  optimal     INTEGER,                   -- shortest known solve (seeded = scramble; lowered by validated wins / the solver)
   pinned      INTEGER NOT NULL DEFAULT 0,-- admin "feature this first" flag
   sort_order  INTEGER NOT NULL DEFAULT 0,-- admin ordering among pinned puzzles
   full_optimal INTEGER,                  -- full solver (BFS) optimal roll count
@@ -92,6 +92,13 @@ CREATE INDEX IF NOT EXISTS idx_attempts_won         ON attempts(puzzle_id, outco
 `;
 
 const now = () => Date.now();
+
+// Bearer tokens are stored hashed (like passwords): a leaked DB dump must not
+// hand out live sessions. The token itself exists only in the response that
+// minted it; lookups hash the presented token and match on the digest. The
+// "sha256:" prefix makes rows self-describing (and lets the legacy-plaintext
+// migration in openDb know which rows still need hashing).
+const hashToken = (t) => "sha256:" + createHash("sha256").update(t).digest("base64url");
 
 // A "this id doesn't exist" error the routing layer can map to 404, distinct
 // from an unexpected failure (which should surface as a 500).
@@ -120,6 +127,13 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   addColumn("puzzles", "color_beams", "TEXT");
   addColumn("users", "password_hash", "TEXT");
   addColumn("webauthn_challenges", "type", "TEXT");
+  // One-time migration: DBs written before tokens were hashed at rest hold the
+  // plaintext token. Hash those rows in place — sha256 is deterministic, so
+  // every existing session keeps working.
+  const legacy = db.prepare("SELECT id, token FROM users WHERE token NOT LIKE 'sha256:%'").all();
+  for (const u of legacy) {
+    db.prepare("UPDATE users SET token = ? WHERE id = ?").run(hashToken(u.token), u.id);
+  }
   const wrapped = new Db(db);
   wrapped.seedCatalog();
   return wrapped;
@@ -132,6 +146,7 @@ export class Db {
   /* --- users --------------------------------------------------------------- */
 
   // Register a username, returning { id, username, token, isAdmin, avatarHash }.
+  // The returned token is the only copy in existence — the DB stores its hash.
   // An optional email links a real Gravatar — we hash it and store ONLY the hash
   // (never the raw address). Throws an Error with .code === "DUP" if the name
   // (case-insensitively) is taken. Admin is granted only when the caller proves
@@ -143,7 +158,7 @@ export class Db {
     try {
       const r = this.db
         .prepare("INSERT INTO users (username, username_lower, token, created_at, is_admin, avatar_hash, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(username, username.toLowerCase(), token, now(), isAdmin, avatarHash, passwordHash);
+        .run(username, username.toLowerCase(), hashToken(token), now(), isAdmin, avatarHash, passwordHash);
       return { id: Number(r.lastInsertRowid), username, token, isAdmin: isAdmin === 1, avatarHash, hasPassword: !!passwordHash };
     } catch (e) {
       if (/UNIQUE/i.test(String(e && e.message))) {
@@ -155,14 +170,16 @@ export class Db {
     }
   }
 
-  // Returns the full user row for password-based login (includes password_hash and token).
+  // Returns the user row for password-based login (includes password_hash).
+  // No token here: the stored value is a hash, so a successful login mints a
+  // fresh token via rotateToken instead of echoing a stored one.
   getUserByUsername(username) {
     if (!username) return null;
     const row = this.db.prepare(
-      "SELECT id, username, token, is_admin AS isAdmin, password_hash FROM users WHERE username_lower = ?"
+      "SELECT id, username, is_admin AS isAdmin, password_hash FROM users WHERE username_lower = ?"
     ).get(username.toLowerCase());
     if (!row) return null;
-    return { id: row.id, username: row.username, token: row.token, isAdmin: row.isAdmin === 1, passwordHash: row.password_hash };
+    return { id: row.id, username: row.username, isAdmin: row.isAdmin === 1, passwordHash: row.password_hash };
   }
 
   // Set or clear a user's password hash. Pass null to remove password login.
@@ -170,9 +187,19 @@ export class Db {
     this.db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, userId);
   }
 
+  // Mint a fresh bearer token for a user, invalidating the old one (only the
+  // hash is stored). Used on every password/passkey login — the stored hash
+  // can't be reversed into a token to echo back — and by the admin password
+  // reset, where rotation is the point: a leaked token must not survive it.
+  rotateToken(userId) {
+    const token = randomBytes(24).toString("base64url");
+    this.db.prepare("UPDATE users SET token = ? WHERE id = ?").run(hashToken(token), userId);
+    return token;
+  }
+
   userByToken(token) {
     if (!token) return null;
-    const row = this.db.prepare("SELECT id, username, is_admin, avatar_hash FROM users WHERE token = ?").get(token);
+    const row = this.db.prepare("SELECT id, username, is_admin, avatar_hash FROM users WHERE token = ?").get(hashToken(token));
     if (!row) return null;
     return { id: row.id, username: row.username, isAdmin: row.is_admin === 1, avatarHash: row.avatar_hash ?? null };
   }
@@ -186,11 +213,12 @@ export class Db {
     return { avatarHash: hash };
   }
 
-  // Returns full user info including token (for passkey login).
+  // Returns full user info (for passkey login; the login mints a fresh token
+  // via rotateToken — the stored hash can't be echoed back).
   getUserByIdFull(userId) {
-    const row = this.db.prepare("SELECT id, username, token, is_admin FROM users WHERE id = ?").get(userId);
+    const row = this.db.prepare("SELECT id, username, is_admin FROM users WHERE id = ?").get(userId);
     if (!row) return null;
-    return { id: row.id, username: row.username, token: row.token, isAdmin: row.is_admin === 1 };
+    return { id: row.id, username: row.username, isAdmin: row.is_admin === 1 };
   }
 
   /* --- passkeys --------------------------------------------------------------- */
@@ -260,14 +288,26 @@ export class Db {
   // the unique name, so re-running never duplicates and never disturbs admin
   // ordering or attempt history. New catalogue entries are appended.
   seedCatalog() {
+    // `optimal` starts at the scramble depth: the stored reverse-scramble is a
+    // genuine known solve of exactly that length. It only ever goes down from
+    // there (validated wins, the admin solver) — never from raw client claims.
     const insert = this.db.prepare(
-      `INSERT OR IGNORE INTO puzzles (name, seed, num_cubes, scramble, par, sort_order, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO puzzles (name, seed, num_cubes, scramble, par, optimal, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const ts = now();
     for (const p of buildCatalog()) {
-      insert.run(p.name, p.seed, p.numCubes, p.scramble, p.par, p.order, ts);
+      insert.run(p.name, p.seed, p.numCubes, p.scramble, p.par, p.scramble, p.order, ts);
     }
+    // Repair pass for DBs written before `optimal` was server-derived: a null,
+    // an impossible value below the BFS-proven floor, or one above the
+    // always-available scramble-length solution is reset to the safe baseline.
+    this.db.prepare(
+      `UPDATE puzzles SET optimal = scramble
+        WHERE optimal IS NULL
+           OR optimal > scramble
+           OR (full_optimal IS NOT NULL AND optimal < full_optimal)`
+    ).run();
   }
 
   puzzleById(id) {
@@ -298,16 +338,31 @@ export class Db {
     return this._puzzleMeta(this.puzzleByName(name));
   }
 
-  // Record a better optimal (shortest known solve) for a puzzle. The value is
-  // client-supplied, so it is also sanity-checked here: it must be a positive
-  // integer no greater than the puzzle's par, or it is silently ignored.
+  // Record a better optimal (shortest known solve) for a puzzle. Called only
+  // for validated wins, but re-checks the bounds anyway: a positive integer,
+  // no greater than par, and never below the BFS-proven floor when known.
   recordOptimal(puzzleId, optimal) {
     if (!Number.isInteger(optimal) || optimal < 1) return;
     const row = this.puzzleById(puzzleId);
     if (!row || optimal > row.par) return;
+    if (row.full_optimal != null && optimal < row.full_optimal) return;
     this.db.prepare(
       "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
     ).run(optimal, puzzleId, optimal);
+  }
+
+  // Verify a claimed win by replaying the player's recorded cursor path
+  // (R/L/U/D codes) against this puzzle's deterministic board. Returns
+  // { rolls, won } (rolls = paid tip-overs; free cursor switches excluded) or
+  // null when the sequence is impossible. Cheap enough for the submit path:
+  // regenerating the board plus ≤4096 replay steps is well under a millisecond.
+  replayWin(puzzleId, moveSeq) {
+    const row = this.puzzleById(puzzleId);
+    if (!row) return null;
+    return replayMoves(
+      { seed: row.seed, numCubes: row.num_cubes, scramble: row.scramble },
+      moveSeq
+    );
   }
 
   // Run the solvers (full/BFS + beam) for one puzzle and persist the results.
@@ -332,6 +387,13 @@ export class Db {
     this.db.prepare(
       "UPDATE puzzles SET full_optimal = ?, beam_moves = ?, min_beam_width = ?, color_beams = ?, solved_at = ? WHERE id = ?"
     ).run(r.bfs ?? null, r.beam ?? null, r.searchWidth ?? null, JSON.stringify(r.colorBeams) ?? null, ts, puzzleId);
+    // A solver solution is a known solve, so it can lower `optimal` too.
+    const known = r.bfs ?? r.beam;
+    if (known != null) {
+      this.db.prepare(
+        "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
+      ).run(known, puzzleId, known);
+    }
     return {
       fullOptimal: r.bfs ?? null, beamMoves: r.beam ?? null,
       minBeamWidth: r.searchWidth ?? null, colorBeams: r.colorBeams ?? null, solvedAt: ts,

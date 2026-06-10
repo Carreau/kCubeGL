@@ -9,6 +9,7 @@ import {
   DIRS as GEN_DIRS, FACE_AXES as GEN_FACE_AXES,
 } from "./level-gen.mjs";
 import * as api from "./api.mjs";
+import { esc } from "./ui.mjs";
 import { bfsSolve, greedySolve } from "./solver.mjs";
 import { initTheme, setupTheme } from "./theme.mjs";
 
@@ -363,6 +364,7 @@ const game = {
   bonus: 0, // carried-over moves earned by clearing puzzles
   cubes: [],
   selected: null, // index into cubes
+  initialSelected: 0, // the generator's opening cursor (Retry restores this)
   moves: 0, // remaining move budget
   startMoves: 0, // budget the level started with (restored on Retry)
   movesUsed: 0, // rolls spent this level (the score)
@@ -385,6 +387,7 @@ const game = {
   // Backend attempt tracking (resilient — null/0 while the server is unreachable).
   attemptId: null, // id of the in-progress attempt on the server
   attemptGen: 0, // bumped per beginAttempt so late responses for an old board are ignored
+  levelGen: 0, // bumped per startLevel so an overlapping (slow) startLevel can't finish late
   attemptStart: 0, // performance.now() when the attempt began (for duration)
   username: null, // logged-in player name, if any (shown in the HUD)
 };
@@ -486,6 +489,11 @@ function buildLevel(config) {
   // Start the cursor on the last-scrambled cube (solution[0].cube) so par is
   // reachable from the opening position, not just by "show solution".
   game.selected = gen.cursorIndex;
+  // Remember it: Retry must restore THIS cursor, not the (possibly
+  // solver-improved) solution's first cube — the server replays recorded wins
+  // from the generator's opening cursor, so a different start would make a
+  // legitimate retry win unverifiable.
+  game.initialSelected = gen.cursorIndex;
   game.solving = false;
   game.solveQueue = [];
   game.walk = null;
@@ -626,7 +634,7 @@ function afterMove() {
     const hasNext = nextPuzzleName() != null;
     showOverlay(
       "Solved!",
-      `${scoreLine}<br><b>${game.puzzleName}</b> cleared. <b>+1</b> bonus move banked (carried: ${game.bonus}).`,
+      `${scoreLine}<br><b>${esc(game.puzzleName)}</b> cleared. <b>+1</b> bonus move banked (carried: ${game.bonus}).`,
       hasNext ? "Next puzzle" : "Back to puzzles"
     );
     updateHud();
@@ -689,7 +697,9 @@ function tryImproveWithSolver() {
     }
   }
 
-  const greedy = greedySolve(solverState);
+  // Pass the player's chosen win colour: without it greedy can "improve" the
+  // solution into one that solves to the wrong uniform colour.
+  const greedy = greedySolve(solverState, { targetColor: game.winColor });
   if (greedy && greedy.length < game.solution.length) {
     game.solution = solverSolutionToGame(greedy);
   }
@@ -853,10 +863,7 @@ function beginAttempt(puzzleInfo = null) {
   // the old attempt's id must not be installed onto the new board. Capture the
   // generation now and ignore (best-effort abandon) any stale resolution.
   const gen = ++game.attemptGen;
-  api.startAttempt({
-    puzzle: game.puzzleName,
-    optimal: game.optimal,
-  }).then((r) => {
+  api.startAttempt({ puzzle: game.puzzleName }).then((r) => {
     if (!r || !r.attemptId) return;
     if (gen !== game.attemptGen) {
       // A newer board took over while this request was in flight — close the
@@ -921,6 +928,7 @@ function nextPuzzleName() {
 async function startLevel(name) {
   finalizeAttempt("abandoned"); // close a prior open attempt (old movesUsed) first
   game.puzzleName = name;
+  const gen = ++game.levelGen;
   hideOverlay();
 
   // One request serves two purposes: derive the puzzle config (seed + params)
@@ -928,6 +936,10 @@ async function startLevel(name) {
   // Falls back to the deterministic catalogue (cold-start cache) when the server
   // is briefly unreachable.
   const puzzleInfo = await api.getPuzzle(name);
+  // A newer startLevel took over while this request was in flight: bail before
+  // building, or this stale continuation would render board A while attempts
+  // are reported against the newer game.puzzleName.
+  if (gen !== game.levelGen) return;
   const cached = catalogByName(name);
   const config = (puzzleInfo && puzzleInfo.seed != null)
     ? { seed: puzzleInfo.seed, numCubes: puzzleInfo.numCubes, scramble: puzzleInfo.scramble, par: puzzleInfo.par }
@@ -974,11 +986,10 @@ function retryLevel() {
     game.moves = game.startMoves;
     game.movesUsed = 0;
     game.userMoves = []; // replaying the same board ⇒ start recording afresh
-    // Same opening cursor as a fresh build — on the first solution cube, so par
-    // is reachable from the start (cubes[0] often sits in a different island).
-    game.selected = game.solution.length
-      ? game.cubes.indexOf(game.solution[0].cube)
-      : 0;
+    // Same opening cursor as a fresh build (the generator's cursorIndex — NOT
+    // solution[0].cube, which tryImproveWithSolver may have replaced with a
+    // different opening cube; the server verifies wins from the former).
+    game.selected = game.initialSelected;
     game.solving = false;
     game.solveQueue = [];
     game.walk = null;
@@ -1093,8 +1104,12 @@ async function loadOrder() {
 // with ?puzzle=NAME. Read that name (default: the first puzzle in order), show
 // who's playing, and drop the player onto the board. "Puzzles" / M returns to it.
 async function boot() {
-  const saved = localStorage.getItem("kcube.winColor");
-  game.winColor = saved !== null && saved !== "-1" ? Number(saved) : null;
+  // A tampered/stale value (e.g. "abc" → NaN, or an out-of-range index) would
+  // crash the colour picker and make the board silently unwinnable, so only a
+  // valid COLORS index survives the round-trip; anything else means "any colour".
+  const raw = localStorage.getItem("kcube.winColor");
+  const saved = raw === null ? NaN : Number(raw);
+  game.winColor = Number.isInteger(saved) && saved >= 0 && saved < COLORS.length ? saved : null;
   refreshIdentity();
   await loadOrder();
   const wanted = new URLSearchParams(location.search).get("puzzle");

@@ -13,6 +13,7 @@ process.env.KCUBE_ADMIN_TOKEN = ADMIN_TOKEN;
 process.env.KCUBE_RATE_LIMIT = "0";
 
 import { startServer } from "../server/server.mjs";
+import { solutionCodes, replayMoves } from "../src/catalog-solve.mjs";
 
 let passed = 0;
 const fails = [];
@@ -34,17 +35,49 @@ async function call(method, path, { token, body } = {}) {
   return { status: res.status, body: text ? JSON.parse(text) : null };
 }
 
-const win = (token, puzzle, movesUsed, durationMs, optimal = 5) =>
-  play(token, puzzle, "won", movesUsed, durationMs, optimal);
-async function play(token, puzzle, outcome, movesUsed, durationMs, optimal = 5) {
-  const start = await call("POST", "/attempts", { token, body: { puzzle, optimal } });
-  const fin = await call("PATCH", `/attempts/${start.body.attemptId}`, { token, body: { outcome, movesUsed, durationMs } });
+async function play(token, puzzle, outcome, movesUsed, durationMs, moveSeq) {
+  const start = await call("POST", "/attempts", { token, body: { puzzle } });
+  const fin = await call("PATCH", `/attempts/${start.body.attemptId}`,
+    { token, body: { outcome, movesUsed, durationMs, moveSeq } });
   return fin.body;
+}
+
+// Wins are replay-verified server-side, so test wins submit REAL winning
+// sequences: the puzzle's stored solution as R/L/U/D codes. To give players
+// different scores, a win can be padded with "wiggles" — the opening roll done
+// out and back before the solution — each adding exactly 2 paid rolls while
+// leaving the board unchanged.
+const OPP_CODE = { R: "L", L: "R", U: "D", D: "U" };
+const solCache = new Map(); // puzzle name -> { codes, rolls }
+function solutionFor(p) { // p = a catalogue row (has seed/numCubes/scramble)
+  if (!solCache.has(p.name)) {
+    const config = { seed: p.seed, numCubes: p.numCubes, scramble: p.scramble };
+    const codes = solutionCodes(config);
+    solCache.set(p.name, { codes, rolls: replayMoves(config, codes).rolls });
+  }
+  return solCache.get(p.name);
+}
+function win(token, p, wiggles, durationMs) {
+  const sol = solutionFor(p);
+  const moveSeq = (sol.codes[0] + OPP_CODE[sol.codes[0]]).repeat(wiggles) + sol.codes;
+  return play(token, p.name, "won", sol.rolls + 2 * wiggles, durationMs, moveSeq);
 }
 
 try {
   // health
   eq((await call("GET", "/health")).body.ok, true, "health ok");
+
+  // Malformed / oversized request bodies are the client's fault, not a 500 or
+  // a bare connection reset.
+  const badJson = await fetch(api + "/users", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: '{"username":',
+  });
+  eq(badJson.status, 400, "malformed JSON body → 400");
+  const hugeBody = await fetch(api + "/users", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "x".repeat(80_000) }),
+  }).catch(() => null);
+  ok(hugeBody && hugeBody.status === 413, "oversized body → 413");
 
   // catalogue (unauth): a fixed pool of named puzzles with metadata, no best.
   const cat = (await call("GET", "/puzzles")).body;
@@ -52,8 +85,11 @@ try {
   ok(cat.every((p) => typeof p.name === "string" && p.par > 0), "every puzzle has a name + par");
   ok(cat.every((p) => "fullOptimal" in p && "beamMoves" in p && "minBeamWidth" in p && "solvedAt" in p), "every puzzle carries solver difficulty fields");
   ok(cat.every((p) => p.solvedAt == null), "solver values unset until the solver is run");
+  ok(cat.every((p) => p.optimal === p.scramble), "optimal is seeded from the scramble length");
   eq(cat[0].yourBest, null, "yourBest null when unauth");
+  const R0 = cat[0], R2 = cat[2];
   const P0 = cat[0].name, P1 = cat[1].name, P2 = cat[2].name, P3 = cat[3].name;
+  const S0 = solutionFor(R0).rolls; // P0's genuine solution length (paid rolls)
 
   // registration + case-insensitive uniqueness. Admin is granted only with the
   // bootstrap secret — there's no "first user wins" magic.
@@ -64,6 +100,10 @@ try {
   const tokenA = a.body.token;
   eq((await call("POST", "/users", { body: { username: "Alice" } })).status, 409, "duplicate name → 409");
   eq((await call("POST", "/users", { body: { username: "  " } })).status, 400, "blank name → 400");
+  // Control / bidi-override characters spoof whatever renders around them
+  // (leaderboards, admin lists) — rejected outright.
+  eq((await call("POST", "/users", { body: { username: "evil\u202ename" } })).status, 400, "bidi override in name → 400");
+  eq((await call("POST", "/users", { body: { username: "tab\tname" } })).status, 400, "control char in name → 400");
   // A plain registration (no/incorrect secret) is never admin.
   const plain = await call("POST", "/users", { body: { username: "carol", adminToken: "wrong" } });
   ok(!plain.body.isAdmin, "wrong bootstrap secret → not admin");
@@ -101,32 +141,39 @@ try {
   eq((await call("POST", "/attempts", { body: { puzzle: P0 } })).status, 401, "attempt without token → 401");
   eq((await call("POST", "/attempts", { token: tokenA, body: { puzzle: "no-such-puzzle" } })).status, 404, "unknown puzzle → 404");
 
-  // alice: win P0 in 7, then improve to 5, then a loss
-  let r = await win(tokenA, P0, 7, 5000);
-  eq(r.best, 7, "alice best 7"); eq(r.isRecord, true, "7 is a record"); eq(r.worldBest, 7, "world best 7");
-  r = await win(tokenA, P0, 5, 4000);
-  eq(r.best, 5, "alice best improves to 5"); eq(r.isRecord, true, "5 is a record"); eq(r.worldBest, 5, "world best 5");
+  // alice: win P0 in S0+2 (one wiggle), then improve to S0, then a loss
+  let r = await win(tokenA, R0, 1, 5000);
+  eq(r.best, S0 + 2, "alice best S0+2"); eq(r.isRecord, true, "S0+2 is a record"); eq(r.worldBest, S0 + 2, "world best S0+2");
+  r = await win(tokenA, R0, 0, 4000);
+  eq(r.best, S0, "alice best improves to S0"); eq(r.isRecord, true, "S0 is a record"); eq(r.worldBest, S0, "world best S0");
   r = await play(tokenA, P0, "lost", 13, 9000);
-  eq(r.isRecord, false, "a loss is not a record"); eq(r.best, 5, "best unchanged after loss");
+  eq(r.isRecord, false, "a loss is not a record"); eq(r.best, S0, "best unchanged after loss");
 
-  // bob: win P0 in 9 (worse than alice)
+  // bob: win P0 in S0+4 (worse than alice)
   const tokenB = (await call("POST", "/users", { body: { username: "bob" } })).body.token;
-  r = await win(tokenB, P0, 9, 8000);
-  eq(r.worldBest, 5, "world best still 5 after bob's 9");
+  r = await win(tokenB, R0, 2, 8000);
+  eq(r.worldBest, S0, "world best still S0 after bob's slower win");
 
   // --- attempt update validation (bob's attempt, so alice's stats stay clean) ---
-  const v = await call("POST", "/attempts", { token: tokenB, body: { puzzle: P0, optimal: 5 } });
+  const v = await call("POST", "/attempts", { token: tokenB, body: { puzzle: P0 } });
   const vId = v.body.attemptId;
+  const solP0 = solutionFor(R0);
   // Invalid outcome → 400 (and the attempt stays open).
   eq((await call("PATCH", `/attempts/${vId}`, { token: tokenB, body: { outcome: "cheated", movesUsed: 3 } })).status, 400, "invalid outcome → 400");
   // Another user can't finalise someone else's attempt: it isn't their open attempt → 404.
   eq((await call("PATCH", `/attempts/${vId}`, { token: tokenA, body: { outcome: "won", movesUsed: 7, durationMs: 1000 } })).status, 404, "finalising another user's attempt → 404");
-  // Win sanity checks: a win must cost at least one roll…
+  // Win verification: a win must cost at least one roll…
   eq((await call("PATCH", `/attempts/${vId}`, { token: tokenB, body: { outcome: "won", movesUsed: 0, durationMs: 1000 } })).status, 400, "win with movesUsed 0 → 400");
-  // …and a recorded path can never be shorter than the paid roll count.
-  eq((await call("PATCH", `/attempts/${vId}`, { token: tokenB, body: { outcome: "won", movesUsed: 6, durationMs: 1000, moveSeq: "RRU" } })).status, 400, "moveSeq shorter than movesUsed → 400");
-  // After all those rejections the attempt is still open and can be finished.
-  eq((await call("PATCH", `/attempts/${vId}`, { token: tokenB, body: { outcome: "won", movesUsed: 6, durationMs: 1000, moveSeq: "RRULDR" } })).status, 200, "valid win still accepted after rejected updates");
+  // …must carry its recorded move sequence…
+  eq((await call("PATCH", `/attempts/${vId}`, { token: tokenB, body: { outcome: "won", movesUsed: solP0.rolls, durationMs: 1000 } })).status, 400, "win without a move sequence → 400");
+  // …the sequence must actually replay to a solved board…
+  eq((await call("PATCH", `/attempts/${vId}`, { token: tokenB, body: { outcome: "won", movesUsed: solP0.rolls - 1, durationMs: 1000, moveSeq: solP0.codes.slice(0, -1) } })).status, 400, "non-winning sequence → 400");
+  // …and the claimed movesUsed must equal the sequence's paid roll count.
+  eq((await call("PATCH", `/attempts/${vId}`, { token: tokenB, body: { outcome: "won", movesUsed: solP0.rolls - 1, durationMs: 1000, moveSeq: solP0.codes } })).status, 400, "understated movesUsed → 400");
+  // After all those rejections the attempt is still open and can be finished
+  // (a padded win, so bob's best stays behind alice's on the leaderboard).
+  const vSeq = (solP0.codes[0] + OPP_CODE[solP0.codes[0]]) + solP0.codes;
+  eq((await call("PATCH", `/attempts/${vId}`, { token: tokenB, body: { outcome: "won", movesUsed: solP0.rolls + 2, durationMs: 1000, moveSeq: vSeq } })).status, 200, "replay-verified win accepted after rejected updates");
 
   // --- optimal poisoning: implausible client-supplied optimal is ignored ---
   const optBefore = (await call("GET", `/puzzles/${P0}`)).body.optimal;
@@ -138,13 +185,25 @@ try {
   const poison2 = await call("POST", "/attempts", { token: tokenB, body: { puzzle: P0, optimal: 100000 } });
   await call("PATCH", `/attempts/${poison2.body.attemptId}`, { token: tokenB, body: { outcome: "abandoned", movesUsed: 0, durationMs: 0 } });
   eq((await call("GET", `/puzzles/${P0}`)).body.optimal, optBefore, "optimal above par is ignored too");
+  // The client-supplied optimal channel is gone entirely: even a "plausible"
+  // claimed value on POST /attempts must not move the stored optimal.
+  const fresh = cat.find((p) => p.scramble >= 10 && ![P0, P1, P2, P3].includes(p.name));
+  eq((await call("GET", `/puzzles/${fresh.name}`)).body.optimal, fresh.scramble, "untouched puzzle: optimal = scramble");
+  const claim = await call("POST", "/attempts", { token: tokenB, body: { puzzle: fresh.name, optimal: 1 } });
+  await call("PATCH", `/attempts/${claim.body.attemptId}`, { token: tokenB, body: { outcome: "abandoned", movesUsed: 0, durationMs: 0 } });
+  eq((await call("GET", `/puzzles/${fresh.name}`)).body.optimal, fresh.scramble, "claimed optimal:1 on attempt start is ignored");
+  // …but a replay-verified WIN does lower it (to the win's paid roll count,
+  // when that beats the seeded scramble length).
+  await win(tokenB, fresh, 0, 1000);
+  const freshRolls = solutionFor(fresh).rolls;
+  eq((await call("GET", `/puzzles/${fresh.name}`)).body.optimal, Math.min(fresh.scramble, freshRolls), "a verified win lowers the stored optimal");
 
   // puzzle detail: leaderboard order + difficulty stats
   const d = (await call("GET", `/puzzles/${P0}`, { token: tokenA })).body;
-  eq(d.worldBest, 5, "detail world best 5");
-  eq(d.yourBest, 5, "detail your best 5 (alice)");
+  eq(d.worldBest, S0, "detail world best S0");
+  eq(d.yourBest, S0, "detail your best S0 (alice)");
   eq(d.leaderboard[0].username, "alice", "leaderboard #1 is alice");
-  eq(d.leaderboard[0].best, 5, "leaderboard #1 best 5");
+  eq(d.leaderboard[0].best, S0, "leaderboard #1 best S0");
   eq(d.leaderboard[0].you, true, "leaderboard marks you");
   ok("avatarHash" in d.leaderboard[0], "leaderboard rows carry avatarHash");
   eq(d.leaderboard[0].avatarHash, null, "alice (no email) has null leaderboard avatarHash");
@@ -161,32 +220,43 @@ try {
   eq(ms.solved, 1, "alice solved 1 puzzle");
   eq(ms.wins, 2, "alice has 2 wins");
   ok(ms.losses >= 1, "alice has a loss");
-  ok(Math.abs(ms.avgMovesOverOptimal - 1) < 1e-9, "alice avg moves over optimal = 1");
+  // alice's wins were S0+2 and S0 over P0's current optimal.
+  const optP0 = (await call("GET", `/puzzles/${P0}`)).body.optimal;
+  const expectedAvg = (S0 + 2 - optP0 + (S0 - optP0)) / 2;
+  ok(Math.abs(ms.avgMovesOverOptimal - expectedAvg) < 1e-9, "alice avg moves over optimal matches her wins");
 
   // authed catalogue now shows alice's best for P0
   const cat2 = (await call("GET", "/puzzles", { token: tokenA })).body;
   const p0row = cat2.find((p) => p.name === P0);
-  eq(p0row.yourBest, 5, "authed catalogue shows yourBest 5");
-  eq(p0row.worldBest, 5, "authed catalogue shows worldBest 5");
+  eq(p0row.yourBest, S0, "authed catalogue shows yourBest S0");
+  eq(p0row.worldBest, S0, "authed catalogue shows worldBest S0");
   eq(p0row.solvers, 2, "P0 has 2 solvers");
 
   // move-sequence recording: the player's cursor path round-trips into the row,
-  // and any non-R/L/U/D characters are stripped server-side before storage.
+  // and any non-R/L/U/D characters are stripped server-side before storage
+  // (the win is verified against the CLEANED sequence, so stray junk in an
+  // otherwise-genuine recording doesn't reject it).
   const moveSeqOf = (id) => db.db.prepare("SELECT move_seq FROM attempts WHERE id = ?").get(id).move_seq;
-  const mv = await call("POST", "/attempts", { token: tokenA, body: { puzzle: P2, optimal: 5 } });
-  await call("PATCH", `/attempts/${mv.body.attemptId}`, {
-    token: tokenA, body: { outcome: "won", movesUsed: 6, durationMs: 3000, moveSeq: "RR<bad>UULD" },
-  });
-  eq(moveSeqOf(mv.body.attemptId), "RRUULD", "move sequence stored, junk chars stripped");
-  // A sequence of only junk characters collapses to null rather than "".
-  const junk = await call("POST", "/attempts", { token: tokenA, body: { puzzle: P3, optimal: 5 } });
-  await call("PATCH", `/attempts/${junk.body.attemptId}`, {
+  const solP2 = solutionFor(R2);
+  const mv = await call("POST", "/attempts", { token: tokenA, body: { puzzle: P2 } });
+  const dirty = solP2.codes.slice(0, 2) + "<bad>" + solP2.codes.slice(2);
+  eq((await call("PATCH", `/attempts/${mv.body.attemptId}`, {
+    token: tokenA, body: { outcome: "won", movesUsed: solP2.rolls, durationMs: 3000, moveSeq: dirty },
+  })).status, 200, "win with junk-padded but genuine sequence accepted");
+  eq(moveSeqOf(mv.body.attemptId), solP2.codes, "move sequence stored, junk chars stripped");
+  // A junk-only sequence can't verify a win…
+  const junk = await call("POST", "/attempts", { token: tokenA, body: { puzzle: P3 } });
+  eq((await call("PATCH", `/attempts/${junk.body.attemptId}`, {
     token: tokenA, body: { outcome: "won", movesUsed: 6, durationMs: 3000, moveSeq: "!!!" },
-  });
+  })).status, 400, "junk-only sequence cannot verify a win");
+  // …and on a loss it collapses to null rather than "".
+  eq((await call("PATCH", `/attempts/${junk.body.attemptId}`, {
+    token: tokenA, body: { outcome: "lost", movesUsed: 6, durationMs: 3000, moveSeq: "!!!" },
+  })).status, 200, "loss with junk-only sequence still records");
   eq(moveSeqOf(junk.body.attemptId), null, "junk-only move sequence stored as null");
 
   // abandon via beacon endpoint (token in body)
-  const st = await call("POST", "/attempts", { token: tokenA, body: { puzzle: P1, optimal: 6 } });
+  const st = await call("POST", "/attempts", { token: tokenA, body: { puzzle: P1 } });
   eq((await call("POST", `/attempts/${st.body.attemptId}/abandon`, { body: { token: tokenA, movesUsed: 2, durationMs: 1000 } })).status, 204, "abandon → 204");
   ok((await call("GET", "/me/stats", { token: tokenA })).body.abandoned >= 1, "abandoned counted");
 
@@ -222,8 +292,16 @@ try {
   eq((await call("POST", "/auth/password/login", { body: { username: "frank" } })).status, 400, "missing password → 400");
   const loginRes = await call("POST", "/auth/password/login", { body: { username: "frank", password: "correct-horse" } });
   eq(loginRes.status, 200, "correct credentials → 200");
-  eq(loginRes.body.token, tokenF, "password login returns same token");
+  // Tokens are stored hashed, so a login mints a fresh one and the old token
+  // stops working (single live session per account).
+  ok(loginRes.body.token && loginRes.body.token !== tokenF, "password login mints a fresh token");
   eq(loginRes.body.username, "frank", "password login returns username");
+  eq((await call("GET", "/me", { token: tokenF })).status, 401, "pre-login token revoked by login");
+  const tokenF2 = loginRes.body.token;
+  eq((await call("GET", "/me", { token: tokenF2 })).body.username, "frank", "fresh token works");
+  // At-rest check: the users table holds only sha256 digests, never the token.
+  const storedTok = db.db.prepare("SELECT token FROM users WHERE username_lower = 'frank'").get().token;
+  ok(storedTok.startsWith("sha256:") && !storedTok.includes(tokenF2), "token stored hashed at rest");
 
   // Accounts without a password cannot use password login.
   eq((await call("POST", "/auth/password/login", { body: { username: "alice", password: "anything" } })).status, 401, "password-less account → 401");
@@ -242,7 +320,11 @@ try {
   eq(resetRes.status, 200, "admin reset password → 200");
   ok(resetRes.body.hasPassword, "reset returns hasPassword = true");
   eq((await call("POST", "/auth/password/login", { body: { username: "frank", password: "correct-horse" } })).status, 401, "old password no longer works");
-  eq((await call("POST", "/auth/password/login", { body: { username: "frank", password: "new-password-123" } })).status, 200, "new password works");
+  // The bearer token rotates with the reset: a leaked token must not survive it.
+  eq((await call("GET", "/me", { token: tokenF2 })).status, 401, "old bearer token revoked by password reset");
+  const relogin = await call("POST", "/auth/password/login", { body: { username: "frank", password: "new-password-123" } });
+  eq(relogin.status, 200, "new password works");
+  ok(relogin.body.token && relogin.body.token !== tokenF, "login after reset returns a fresh token");
   // Clear the password.
   const clearRes = await call("POST", `/admin/users/${frankId}/reset-password`, { token: tokenA, body: { newPassword: null } });
   eq(clearRes.status, 200, "admin clear password → 200");

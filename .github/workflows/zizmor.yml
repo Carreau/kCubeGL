@@ -1,8 +1,9 @@
 name: zizmor
 
+# push limited to main so PR branches do not run twice.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 jobs:

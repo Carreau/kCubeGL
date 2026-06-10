@@ -17,7 +17,7 @@
 import { buildCatalog, CATALOG_SIZE, OPPOSITE, budgetFor, cellsConnected } from "../src/shared.mjs";
 import { generateLevel, quatToFaces, qMul, qAxisAngle, DIRS } from "../src/level-gen.mjs";
 import { bfsSolve, beamSolve } from "../src/solver.mjs";
-import { buildCatalogState } from "../src/catalog-solve.mjs";
+import { buildCatalogState, solutionCodes, replayMoves } from "../src/catalog-solve.mjs";
 
 let passed = 0;
 const fails = [];
@@ -130,6 +130,34 @@ try {
     }
     ok(valid, `${p.name}: BFS solution is legal on the real board`);
     ok(isUniformConnected(cubes), `${p.name}: BFS solution wins on the real board`);
+  }
+
+  /* --- 3b. Win replay verification ------------------------------------------ */
+
+  // The server accepts a win only when its recorded R/L/U/D stream replays to a
+  // solved board (catalog-solve.replayMoves). For EVERY catalogue puzzle, the
+  // stored solution rendered as codes (solutionCodes: cursor walks + rolls)
+  // must replay to a win whose paid roll count is the solution length.
+  for (const p of buildCatalog()) {
+    const config = { seed: p.seed, numCubes: p.numCubes, scramble: p.scramble };
+    const codes = solutionCodes(config);
+    ok(typeof codes === "string" && codes.length > 0, `${p.name}: solution renders as codes`);
+    const r = replayMoves(config, codes);
+    ok(r && r.won, `${p.name}: solution codes replay to a win`);
+    eq(r && r.rolls, generateLevel(config).scramble.length, `${p.name}: replay roll count = solution length`);
+  }
+  {
+    const p = buildCatalog()[0];
+    const config = { seed: p.seed, numCubes: p.numCubes, scramble: p.scramble };
+    const codes = solutionCodes(config);
+    const cut = replayMoves(config, codes.slice(0, -1));
+    ok(cut === null || cut.won === false, "a truncated solution does not verify as a win");
+    eq(replayMoves(config, "XYZ"), null, "non-code characters make the replay impossible");
+    // A wiggle (one roll out and back) adds exactly 2 paid rolls and still wins.
+    const OPP = { R: "L", L: "R", U: "D", D: "U" };
+    const padded = replayMoves(config, codes[0] + OPP[codes[0]] + codes);
+    ok(padded && padded.won, "a wiggle-padded solution still wins");
+    eq(padded && padded.rolls, replayMoves(config, codes).rolls + 2, "each wiggle costs exactly 2 rolls");
   }
 
   /* --- 4. Solver/engine roll equivalence ------------------------------------ */

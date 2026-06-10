@@ -31,6 +31,7 @@ export function fmtMs(ms) {
 }
 
 export function fmtDate(ms) {
+  if (ms == null) return "–"; // null-tolerant like the other formatters
   return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 

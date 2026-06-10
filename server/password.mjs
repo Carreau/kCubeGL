@@ -1,9 +1,9 @@
 /* ============================================================================
  * Password hashing — scrypt via node:crypto (no native dependency).
  *
- * The project rule is "Node built-ins only": the Docker image runs the server
- * without an npm install, so password hashes use Node's built-in memory-hard
- * scrypt rather than an npm argon2 binding.
+ * Dependencies are allowed in this project, but the Docker image runs the
+ * server without an npm install, so password hashes use Node's built-in
+ * memory-hard scrypt rather than an npm argon2 binding.
  *
  * Stored format (every parameter explicit, so work factors can be raised later
  * without invalidating existing hashes):
