@@ -34,3 +34,12 @@ export function bindThemeBtn(btn) {
   btn.addEventListener('click', () => update(toggleTheme()));
   document.addEventListener('themechange', e => update(e.detail.theme));
 }
+
+// One-call page boot: apply the theme and wire the header toggle button (if
+// the page has one). Every page script calls this once at startup.
+export function setupTheme() {
+  const theme = initTheme();
+  const btn = document.getElementById('themeBtn');
+  if (btn) bindThemeBtn(btn);
+  return theme;
+}

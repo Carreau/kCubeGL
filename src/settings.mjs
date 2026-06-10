@@ -1,13 +1,7 @@
 import * as api from './api.mjs';
 import { gravatarUrl, gravatarUrlForHash } from './shared.mjs';
-import { initTheme, bindThemeBtn } from './theme.mjs';
-
-const $ = (id) => document.getElementById(id);
-
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
+import { setupTheme } from './theme.mjs';
+import { $, esc } from './ui.mjs';
 
 function setMsg(text, isErr = false) {
   const el = $('formMsg');
@@ -72,7 +66,5 @@ async function boot() {
   $('clearBtn').addEventListener('click', clear);
 }
 
-initTheme();
-const themeBtn = document.getElementById('themeBtn');
-if (themeBtn) bindThemeBtn(themeBtn);
+setupTheme();
 boot();

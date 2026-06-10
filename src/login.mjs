@@ -1,7 +1,6 @@
 import * as api from './api.mjs';
-import { initTheme, bindThemeBtn } from './theme.mjs';
-
-const $ = (id) => document.getElementById(id);
+import { setupTheme } from './theme.mjs';
+import { $ } from './ui.mjs';
 
 /* --- base64url <-> ArrayBuffer helpers -------------------------------------- */
 
@@ -267,7 +266,5 @@ async function boot() {
   $('skipPasskeyBtn').addEventListener('click', () => { location.href = returnUrl(); });
 }
 
-initTheme();
-const themeBtn = document.getElementById('themeBtn');
-if (themeBtn) bindThemeBtn(themeBtn);
+setupTheme();
 boot();

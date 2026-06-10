@@ -20,13 +20,9 @@
  *   ArrowDown  → R_x(+90°): back→top, top→front, front→bottom, bottom→back
  * =========================================================================== */
 
-const BOARD = 5;
-const NEI = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+import { BOARD, NEI, OPPOSITE, inBounds } from "./shared.mjs";
+
 const DIRS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
-const OPPOSITE = {
-  ArrowRight: "ArrowLeft", ArrowLeft: "ArrowRight",
-  ArrowUp: "ArrowDown",    ArrowDown: "ArrowUp",
-};
 
 const ROLL_PERM = {
   ArrowRight: [2, 3, 1, 0, 4, 5],
@@ -34,12 +30,10 @@ const ROLL_PERM = {
   ArrowUp:    [0, 1, 4, 5, 3, 2],
   ArrowDown:  [0, 1, 5, 4, 2, 3],
 };
-export const ROLL_DR = { ArrowRight: 0,  ArrowLeft:  0,  ArrowUp: -1, ArrowDown: 1  };
-export const ROLL_DC = { ArrowRight: 1,  ArrowLeft: -1,  ArrowUp:  0, ArrowDown: 0  };
+const ROLL_DR = { ArrowRight: 0,  ArrowLeft:  0,  ArrowUp: -1, ArrowDown: 1  };
+const ROLL_DC = { ArrowRight: 1,  ArrowLeft: -1,  ArrowUp:  0, ArrowDown: 0  };
 
 /* --- Low-level helpers ------------------------------------------------------- */
-
-function inBounds(r, c) { return r >= 0 && r < BOARD && c >= 0 && c < BOARD; }
 
 function cubeAt(cubes, r, c) {
   for (const k of cubes) if (k.r === r && k.c === c) return k;
@@ -269,7 +263,7 @@ function singleCubeSolve(faces, targetColor) {
 }
 
 // The colour that the most cubes already show on top.
-export function pickTargetColor(cubes) {
+function pickTargetColor(cubes) {
   const counts = new Array(6).fill(0);
   for (const c of cubes) counts[topColor(c)]++;
   return counts.indexOf(Math.max(...counts));

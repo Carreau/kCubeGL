@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/server.mjs",
     "dev": "python3 -m http.server 8080",
-    "check": "node --check src/main.js && node --check src/shared.mjs && node --check src/level-gen.mjs && node --check src/solver.mjs && node --check src/catalog-solve.mjs && node --check src/api.mjs && node --check src/index.mjs && node --check src/login.mjs && node --check src/settings.mjs && node --check src/admin.mjs && node --check server/db.mjs && node --check server/server.mjs && node --check server/webauthn.mjs",
+    "check": "for f in src/*.js src/*.mjs server/*.mjs test/*.mjs; do node --check \"$f\" || exit 1; done",
     "test": "npm run test:api && npm run test:smoke",
     "test:api": "node --disable-warning=ExperimentalWarning test/api.mjs",
     "test:smoke": "node test/smoke.mjs"
@@ -24,8 +24,5 @@
   "license": "MIT",
   "devDependencies": {
     "playwright": "^1.56.1"
-  },
-  "dependencies": {
-    "@node-rs/argon2": "^2.0.2"
   }
 }

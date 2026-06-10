@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS users (
   -- Gravatar hash derived from the player's email. We hash the email and keep
   -- ONLY the hash (never the raw address); non-null means an email was supplied.
   avatar_hash    TEXT,
-  password_hash  TEXT                    -- argon2id hash; null = no password set
+  password_hash  TEXT                    -- scrypt hash (server/password.mjs); null = no password set
 );
 
 CREATE TABLE IF NOT EXISTS passkeys (
@@ -105,13 +105,14 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
-  // Additive migration: add color_beams if it doesn't exist yet (safe to retry).
-  try { db.exec("ALTER TABLE puzzles ADD COLUMN color_beams TEXT"); } catch (_) {}
-  // Migration: add password_hash to existing DBs created before this column existed.
-  const cols = db.prepare("PRAGMA table_info(users)").all();
-  if (!cols.some(c => c.name === "password_hash")) {
-    db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT;");
-  }
+  // Additive migrations: add columns missing from DBs created by older schemas.
+  const addColumn = (table, name, ddl) => {
+    if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${ddl};`);
+    }
+  };
+  addColumn("puzzles", "color_beams", "TEXT");
+  addColumn("users", "password_hash", "TEXT");
   const wrapped = new Db(db);
   wrapped.seedCatalog();
   return wrapped;

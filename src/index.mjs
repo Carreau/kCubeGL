@@ -15,29 +15,20 @@
 
 import * as api from "./api.mjs";
 import { buildCatalog, gravatarUrl, gravatarUrlForHash } from "./shared.mjs";
-import { initTheme, bindThemeBtn } from "./theme.mjs";
+import { setupTheme } from "./theme.mjs";
+import { $, esc, dash, pct, fmtMs } from "./ui.mjs";
 
 const LOCAL_KEY = "kcube.v1"; // same store the game writes best scores to
 
 const state = { online: false, user: null, puzzles: [], sort: "featured", sortDir: "desc" };
 
-const $ = (id) => document.getElementById(id);
-
 /* --- small helpers ---------------------------------------------------------- */
-
-// Escape text before putting it in innerHTML (usernames come from the server).
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
 
 // Locally-saved best scores (keyed by puzzle name), the offline "your best".
 function readLocalBest() {
   try { return (JSON.parse(localStorage.getItem(LOCAL_KEY)) || {}).best || {}; }
   catch { return {}; }
 }
-
-const dash = (v) => (v == null ? "–" : v);
 
 // A small Gravatar avatar <img> for a player. `entry` is a { username, avatarHash }
 // object (account or leaderboard row): we use their real Gravatar hash when they
@@ -52,16 +43,6 @@ function avatar(entry, size = 18) {
   return `<img class="avatar" src="${esc(src)}" alt="" width="${size}" height="${size}" ` +
     `loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`;
 }
-
-function fmtMs(ms) {
-  if (ms == null) return "–";
-  const s = ms / 1000;
-  if (s < 60) return s.toFixed(s < 10 ? 1 : 0) + "s";
-  const m = Math.floor(s / 60);
-  return m + "m " + String(Math.round(s - m * 60)).padStart(2, "0") + "s";
-}
-
-const pct = (v) => (v == null ? "–" : Math.round(v * 100) + "%");
 
 // "Moves over optimal": how far the world's best solve sits above the scramble's
 // length — a measured proxy for how tricky the puzzle is in practice.
@@ -353,7 +334,5 @@ async function boot() {
   await Promise.all([loadGrid(), renderMyStats()]);
 }
 
-initTheme();
-const themeBtn = document.getElementById('themeBtn');
-if (themeBtn) bindThemeBtn(themeBtn);
+setupTheme();
 boot();

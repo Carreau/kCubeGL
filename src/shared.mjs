@@ -17,7 +17,18 @@
  * is not obviously harder, so difficulty comes from varied scrambles, not size.
  * ========================================================================== */
 
-export const BOARD = 5; // 5×5 grid (kept in sync with src/main.js)
+export const BOARD = 5; // 5×5 grid
+
+export function inBounds(r, c) { return r >= 0 && r < BOARD && c >= 0 && c < BOARD; }
+
+// 4-neighbourhood (N/S/E/W) used for connectivity and adjacency tests.
+export const NEI = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+// Reverse of each arrow roll (undo a scramble; forbid immediate backtracking).
+export const OPPOSITE = {
+  ArrowRight: "ArrowLeft", ArrowLeft: "ArrowRight",
+  ArrowUp: "ArrowDown", ArrowDown: "ArrowUp",
+};
 
 // Six distinct face colours — index doubles as the face id.
 // Kept in shared.mjs (pure, no DOM) so the landing page and server can use it.

@@ -18,16 +18,13 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, normalize, extname, sep } from "node:path";
-import { hash as argon2Hash, verify as argon2Verify } from "@node-rs/argon2";
 import { openDb } from "./db.mjs";
+import { hashPassword, verifyPassword } from "./password.mjs";
 import { generateChallenge, verifyRegistration, verifyAssertion } from './webauthn.mjs';
-
-// Argon2id settings: 64 MB memory, 3 iterations, 1 thread — OWASP minimum recommendation.
-const ARGON2_OPTS = { memoryCost: 65536, timeCost: 3, parallelism: 1 };
 
 // Pre-compute a dummy hash so we can always spend the same time in the login
 // path regardless of whether the username exists (prevents user-enumeration via timing).
-const dummyHashPromise = argon2Hash("_kcube_no_password_placeholder_", ARGON2_OPTS);
+const dummyHashPromise = hashPassword("_kcube_no_password_placeholder_");
 
 const ROOT = normalize(join(dirname(fileURLToPath(import.meta.url)), ".."));
 
@@ -182,7 +179,7 @@ async function handleApi(req, res, url, db) {
   // Anyone can register a username. Admin is granted only when the request
   // carries the bootstrap secret KCUBE_ADMIN_TOKEN. An optional email is used
   // only to derive a Gravatar hash and is never stored. An optional password is
-  // hashed with argon2id before storage — username-only accounts remain valid.
+  // hashed with scrypt before storage — username-only accounts remain valid.
   if (method === "POST" && parts[1] === "users" && parts.length === 2) {
     const body = await readJson(req);
     const username = typeof body.username === "string" ? body.username.trim() : "";
@@ -197,7 +194,7 @@ async function handleApi(req, res, url, db) {
     }
     const secret = adminToken();
     const admin = !!secret && body.adminToken === secret;
-    const passwordHash = password ? await argon2Hash(password, ARGON2_OPTS) : null;
+    const passwordHash = password ? await hashPassword(password) : null;
     try {
       return sendJson(res, 201, db.createUser(username, { admin, email, passwordHash }));
     } catch (e) {
@@ -399,9 +396,7 @@ async function handleApi(req, res, url, db) {
     const dummyHash = await dummyHashPromise;
     const user = db.getUserByUsername(username);
     // Always run verify (even against a dummy hash) to prevent user-enumeration via timing.
-    const storedHash = user?.passwordHash ?? dummyHash;
-    let valid = false;
-    try { valid = await argon2Verify(storedHash, password); } catch { /* malformed hash */ }
+    const valid = await verifyPassword(user?.passwordHash ?? dummyHash, password);
     if (!valid || !user?.passwordHash) return sendJson(res, 401, { error: 'invalid credentials' });
     return sendJson(res, 200, { token: user.token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
   }
@@ -447,7 +442,7 @@ async function handleApi(req, res, url, db) {
       return sendJson(res, 400, { error: 'password must be 8–128 characters' });
     }
     const passwordHash = (newPassword && newPassword.length >= 8)
-      ? await argon2Hash(newPassword, ARGON2_OPTS)
+      ? await hashPassword(newPassword)
       : null;
     db.setUserPassword(targetId, passwordHash);
     return sendJson(res, 200, { ok: true, hasPassword: !!passwordHash });

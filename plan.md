@@ -16,13 +16,13 @@ Project status, scope, and future considerations for kCubeGL.
 - ✅ Win/lose flow
 - ✅ **Real landing page** (`index.html`) — level grid with your best / world best, sign-in, per-level leaderboard + difficulty detail; game lives at `play.html?level=N`
 - ✅ **SQLite backend** (`node:sqlite`, no native deps) — `server/server.mjs` serves the game + a JSON API
-- ✅ **Username accounts** (bearer-token, no password)
+- ✅ **Username accounts** (bearer-token; optional password login, plus passkeys)
 - ✅ **Leaderboards** (fewest moves per level, tie-broken by time)
 - ✅ **Per-attempt tracking** (won / lost / abandoned, moves, duration) → puzzle-difficulty and player-skill aggregates
 - ✅ Tests: API integration (`test/api.mjs`) + headless browser smoke (`test/smoke.mjs`)
 
 ### Deliberately Out of Scope
-- ❌ **Passwords / sessions** — accounts are name + token only (a token in localStorage); no recovery or cross-device sync yet
+- ❌ **Self-serve account recovery** — passwords and passkeys exist, but a lost token with no password/passkey set still means asking an admin (password reset) or picking a new name
 - ❌ **Sound / Timer-pressure / Undo**
 - ❌ **Difficulty progression** — move budget does not ramp from measured difficulty yet (the data to drive it now exists)
 - ❌ **Mobile touch controls**
@@ -34,7 +34,7 @@ Project status, scope, and future considerations for kCubeGL.
 2. **Random Scrambling**: Naive random reverse-rolls (now seeded/deterministic per level); no explicit difficulty targeting yet
 3. **View Rotation**: Continuous (Q/E hold), not snapped; can be disorienting
 4. **Cube Selection**: Cursor can only move between physically adjacent cubes
-5. **Account Recovery**: A lost token (cleared localStorage) means picking a new name — no password/recovery yet
+5. **Account Recovery**: A lost token (cleared localStorage) is only recoverable if a password or passkey was set; otherwise an admin reset or a new name
 6. **Three.js Dependency on CDN**: Game won't load if unpkg.com is unavailable or slow
 
 ## Potential Future Enhancements
@@ -56,7 +56,7 @@ Project status, scope, and future considerations for kCubeGL.
 
 ### Long-term
 - [x] **Backend Leaderboard** — Scores persisted to SQLite; per-level global rankings ✅
-- [ ] **Cloud Saves** — Sync progress across devices (needs password/real auth first)
+- [ ] **Cloud Saves** — Sync progress across devices (password/passkey login now makes this possible)
 - [ ] **Themes** — Custom cube colors, board styles, UI skins
 - [ ] **3D Model Import** — Replace procedural cubes with custom 3D assets
 - [ ] **Larger Boards** — 6×6, 7×7 or variable sizes

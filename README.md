@@ -52,7 +52,7 @@ required either way.
   scramble depths, all derived from one master seed — so a given puzzle is an
   identical board on every device, which makes the best score a genuine record.
   Admins can pin/order which puzzles are featured first.
-- **Sign in with a name** (no password) to land on the leaderboards, and
+- **Sign in with a name** (password optional) to land on the leaderboards, and
   optionally add a **passkey** for secure WebAuthn login on later visits. The server
   records every *attempt* — won, lost or abandoned — with its move count and
   duration. From those rows it derives per-puzzle **difficulty** (win rate, avg
@@ -133,12 +133,11 @@ Implemented: 5×5 board, bevelled dice, arrow-key cursor & rolling, animated
 tip-over, **deterministic** solvable puzzle generation, contiguous-block win
 condition, herding-aware move budget, carried bonus, Q/E view rotation,
 show-solution playback, win/lose flow; a real **level-picker landing page**, an
-optional **SQLite backend** with **username accounts** (plus additive
-**passkey / WebAuthn login**), **leaderboards**, and per-attempt tracking
+optional **SQLite backend** with **username accounts** (optional **password
+login** plus additive **passkey / WebAuthn login**), **leaderboards**, and per-attempt tracking
 feeding **puzzle-difficulty** and **player-skill** stats. Best scores also
 persist locally, so a brief server hiccup never blocks play. Deliberately left
-out for now: passwords (usernames have none — passkeys are the secure login),
-sound, timer and undo.
+out for now: sound, timer and undo.
 
 ## License
 

@@ -1,13 +1,16 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { buildCatalog, catalogByName, gravatarUrl, gravatarUrlForHash, COLORS } from "./shared.mjs";
 import {
-  generateLevel, quatToFaces, cellsConnected, OPPOSITE, NEI,
+  buildCatalog, catalogByName, gravatarUrl, gravatarUrlForHash, COLORS,
+  BOARD, NEI, OPPOSITE, inBounds,
+} from "./shared.mjs";
+import {
+  generateLevel, quatToFaces, cellsConnected,
   DIRS as GEN_DIRS, FACE_AXES as GEN_FACE_AXES,
 } from "./level-gen.mjs";
 import * as api from "./api.mjs";
-import { bfsSolve, greedySolve, ROLL_DR, ROLL_DC } from "./solver.mjs";
-import { initTheme, bindThemeBtn } from "./theme.mjs";
+import { bfsSolve, greedySolve } from "./solver.mjs";
+import { initTheme, setupTheme } from "./theme.mjs";
 
 /* ============================================================================
  * kCube — a 3D dice-rolling puzzle.
@@ -22,7 +25,6 @@ import { initTheme, bindThemeBtn } from "./theme.mjs";
 
 /* --- Constants -------------------------------------------------------------- */
 
-const BOARD = 5; // 5×5 grid
 const S = 1.0; // cell spacing == cube size (so a roll lands exactly one cell over)
 const HALF = S / 2;
 const ROLL_MS = 170; // duration of a roll animation
@@ -78,7 +80,6 @@ function remapArrowKey(key) {
 // the server uses too); this file just renders what it produces. No PRNG here.
 const cellX = (col) => (col - (BOARD - 1) / 2) * S;
 const cellZ = (row) => (row - (BOARD - 1) / 2) * S;
-const inBounds = (r, c) => r >= 0 && r < BOARD && c >= 0 && c < BOARD;
 
 // Build a canvas texture: a coloured rounded square on a dark background, so
 // faces read clearly and adjacent cubes still show a seam between them.
@@ -938,8 +939,7 @@ function goToLevels() {
 
 el.btn.addEventListener("click", overlayAction);
 el.solveBtn.addEventListener("click", () => { showSolution(); el.solveBtn.blur(); });
-const themeBtnEl = document.getElementById('themeBtn');
-if (themeBtnEl) bindThemeBtn(themeBtnEl);
+setupTheme();
 el.menuBtn.addEventListener("click", () => { if (!game.solving) goToLevels(); el.menuBtn.blur(); });
 el.infoBtn.addEventListener("click", () => { el.infoPanel.classList.remove("hidden"); el.infoBtn.blur(); });
 el.infoCloseBtn.addEventListener("click", () => { el.infoPanel.classList.add("hidden"); });
