@@ -30,6 +30,14 @@ const S = 1.0; // cell spacing == cube size (so a roll lands exactly one cell ov
 const HALF = S / 2;
 const ROLL_MS = 170; // duration of a roll animation
 const STORE_KEY = "kcube.v1"; // localStorage key for persisted scores
+const DESIGN_KEY = "kcube.design";
+const DESIGN_DEFAULTS = { brightness: 1, saturation: 1, metalness: 0.05, bevel: 0.08, scale: 1 };
+function loadDesign() {
+  try { return { ...DESIGN_DEFAULTS, ...JSON.parse(localStorage.getItem(DESIGN_KEY)) }; }
+  catch { return { ...DESIGN_DEFAULTS }; }
+}
+function saveDesign(d) { try { localStorage.setItem(DESIGN_KEY, JSON.stringify(d)); } catch {} }
+const design = loadDesign();
 
 // Solution-playback pacing (slower than live play so each step is watchable).
 const SOLVE_ROLL_MS = 420; // roll duration while auto-solving (vs ROLL_MS)
@@ -91,6 +99,17 @@ const cellZ = (row) => (row - (BOARD - 1) / 2) * S;
 
 // Ease-in-out (smooth start and stop) for roll and cursor-walk animations.
 const easeInOut = (t) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+
+// Blend a hex colour toward its luminance-weighted grey by `factor` (0 = grey,
+// 1 = original, 2 = twice as far from grey as the original).
+function hslSaturate(hex, factor) {
+  const r = (hex >> 16) & 0xff, g = (hex >> 8) & 0xff, b = hex & 0xff;
+  const lum = Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
+  const clamp = (v) => Math.min(255, Math.max(0, Math.round(v)));
+  return (clamp(lum + (r - lum) * factor) << 16) |
+         (clamp(lum + (g - lum) * factor) << 8) |
+          clamp(lum + (b - lum) * factor);
+}
 
 // Per-theme scene colours. The board stays a neutral tone (never hinting at the
 // target colour); the face-texture background is the seam colour between cubes.
@@ -156,16 +175,14 @@ function faceTexture(hex, bg = SCENE_THEME.dark.faceBg, sheen = SCENE_THEME.dark
 // BoxGeometry material order is: +X, -X, +Y, -Y, +Z, -Z — matching FACE_AXES.
 // All cubes share this material array, so rebuilding each map on a theme change
 // (see applySceneTheme) recolours every cube's face seams at once.
-const FACE_MATERIALS = FACE_AXES.map(
-  (f) => {
-    const t = SCENE_THEME[initTheme()] || SCENE_THEME.dark;
-    return new THREE.MeshStandardMaterial({
-      map: faceTexture(faceHex(f.color, t), t.faceBg, t.sheen),
-      roughness: 0.55,
-      metalness: 0.05,
-    });
-  }
-);
+const FACE_MATERIALS = FACE_AXES.map((f) => {
+  const t = SCENE_THEME[initTheme()] || SCENE_THEME.dark;
+  return new THREE.MeshStandardMaterial({
+    map: faceTexture(hslSaturate(faceHex(f.color, t), design.saturation), t.faceBg, t.sheen),
+    roughness: Math.max(0.1, 0.55 - design.metalness * 0.45),
+    metalness: design.metalness,
+  });
+});
 
 // Which colour faces up for a given orientation quaternion. quatToFaces returns
 // the [+X,-X,+Y,-Y,+Z,-Z] colour slots; index 2 is the +Y (top) face.
@@ -258,8 +275,9 @@ function applyCamera() {
 applyCamera();
 
 // Lights (key intensity and fill colour are per-theme; see applySceneTheme)
-scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-const key = new THREE.DirectionalLight(0xffffff, SCENE_THEME[initTheme()].key);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.55 * design.brightness);
+scene.add(ambientLight);
+const key = new THREE.DirectionalLight(0xffffff, SCENE_THEME[initTheme()].key * design.brightness);
 key.position.set(4, 9, 5);
 key.castShadow = true;
 key.shadow.mapSize.set(2048, 2048);
@@ -271,7 +289,7 @@ key.shadow.camera.top = 6;
 key.shadow.camera.bottom = -6;
 scene.add(key);
 const fill = new THREE.DirectionalLight(
-  SCENE_THEME[initTheme()].fill, SCENE_THEME[initTheme()].fillIntensity);
+  SCENE_THEME[initTheme()].fill, SCENE_THEME[initTheme()].fillIntensity * design.brightness);
 fill.position.set(-5, 4, -4);
 scene.add(fill);
 
@@ -314,14 +332,15 @@ function applySceneTheme(theme) {
   const t = SCENE_THEME[theme] || SCENE_THEME.dark;
   renderer.setClearColor(t.clear);
   baseMat.color.set(t.base);
-  key.intensity = t.key;
+  ambientLight.intensity = 0.55 * design.brightness;
+  key.intensity = t.key * design.brightness;
   fill.color.set(t.fill);
-  fill.intensity = t.fillIntensity;
+  fill.intensity = t.fillIntensity * design.brightness;
   for (const { mat, dark } of tileMats) mat.color.set(dark ? t.tileB : t.tileA);
   FACE_AXES.forEach((f, i) => {
     const mat = FACE_MATERIALS[i];
     mat.map?.dispose();
-    mat.map = faceTexture(faceHex(f.color, t), t.faceBg, t.sheen);
+    mat.map = faceTexture(hslSaturate(faceHex(f.color, t), design.saturation), t.faceBg, t.sheen);
     mat.needsUpdate = true;
   });
 }
@@ -359,13 +378,14 @@ scene.add(cursor);
 
 /* --- Cube objects ----------------------------------------------------------- */
 
-const cubeGeo = bevelledCubeGeometry(S, 0.08, 3);
+let cubeGeo = bevelledCubeGeometry(S, Math.max(0.001, design.bevel), 3);
 
 class Cube {
   constructor(r, c) {
     this.mesh = new THREE.Mesh(cubeGeo, FACE_MATERIALS);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
+    this.mesh.scale.setScalar(design.scale);
     scene.add(this.mesh);
     this.setCell(r, c);
     this.mesh.quaternion.identity(); // solved
@@ -439,6 +459,10 @@ const el = {
   infoBtn: document.getElementById("infoBtn"),
   infoPanel: document.getElementById("infoPanel"),
   infoCloseBtn: document.getElementById("infoCloseBtn"),
+  designBtn: document.getElementById("designBtn"),
+  designPanel: document.getElementById("designPanel"),
+  designCloseBtn: document.getElementById("designCloseBtn"),
+  designResetBtn: document.getElementById("designResetBtn"),
 };
 
 // Are the current cubes a single 4-connected (N/S/E/W) block? (cellsConnected
@@ -1128,6 +1152,96 @@ async function loadOrder() {
   game.order = Array.isArray(list) && list.length
     ? list.map((p) => p.name)
     : buildCatalog().map((p) => p.name);
+}
+
+/* --- Design / Appearance panel --------------------------------------------- */
+
+function applyBrightness(v) {
+  const t = SCENE_THEME[initTheme()] || SCENE_THEME.dark;
+  ambientLight.intensity = 0.55 * v;
+  key.intensity = t.key * v;
+  fill.intensity = t.fillIntensity * v;
+}
+
+function applySaturation(v) {
+  const t = SCENE_THEME[initTheme()] || SCENE_THEME.dark;
+  FACE_AXES.forEach((f, i) => {
+    const mat = FACE_MATERIALS[i];
+    mat.map?.dispose();
+    mat.map = faceTexture(hslSaturate(faceHex(f.color, t), v), t.faceBg, t.sheen);
+    mat.needsUpdate = true;
+  });
+}
+
+function applyMetalness(v) {
+  FACE_MATERIALS.forEach((m) => {
+    m.metalness = v;
+    m.roughness = Math.max(0.1, 0.55 - v * 0.45);
+    m.needsUpdate = true;
+  });
+}
+
+function applyBevel(v) {
+  const newGeo = bevelledCubeGeometry(S, Math.max(0.001, v), 3);
+  for (const cube of game.cubes) cube.mesh.geometry = newGeo;
+  cubeGeo.dispose();
+  cubeGeo = newGeo;
+}
+
+function applyCubeScale(v) {
+  for (const cube of game.cubes) cube.mesh.scale.setScalar(v);
+}
+
+{
+  function syncDesignUI() {
+    const set = (id, valId, v, decimals) => {
+      document.getElementById(id).value = v;
+      document.getElementById(valId).textContent = v.toFixed(decimals);
+    };
+    set("ds-brightness", "dv-brightness", design.brightness, 2);
+    set("ds-saturation", "dv-saturation", design.saturation, 2);
+    set("ds-metalness",  "dv-metalness",  design.metalness,  2);
+    set("ds-bevel",      "dv-bevel",      design.bevel,      2);
+    set("ds-scale",      "dv-scale",      design.scale,      2);
+  }
+
+  function wireSlider(sliderId, valId, key, fn, decimals) {
+    document.getElementById(sliderId).addEventListener("input", (e) => {
+      const v = parseFloat(e.target.value);
+      document.getElementById(valId).textContent = v.toFixed(decimals);
+      design[key] = v;
+      saveDesign(design);
+      fn(v);
+    });
+  }
+
+  wireSlider("ds-brightness", "dv-brightness", "brightness", applyBrightness, 2);
+  wireSlider("ds-saturation", "dv-saturation", "saturation", applySaturation, 2);
+  wireSlider("ds-metalness",  "dv-metalness",  "metalness",  applyMetalness,  2);
+  wireSlider("ds-bevel",      "dv-bevel",      "bevel",      applyBevel,      2);
+  wireSlider("ds-scale",      "dv-scale",      "scale",      applyCubeScale,  2);
+
+  el.designBtn.addEventListener("click", () => {
+    el.designPanel.classList.remove("hidden");
+    el.designBtn.blur();
+  });
+  el.designCloseBtn.addEventListener("click", () => el.designPanel.classList.add("hidden"));
+  el.designPanel.addEventListener("click", (e) => {
+    if (e.target === el.designPanel) el.designPanel.classList.add("hidden");
+  });
+
+  el.designResetBtn.addEventListener("click", () => {
+    Object.assign(design, DESIGN_DEFAULTS);
+    saveDesign(design);
+    syncDesignUI();
+    applyBrightness(design.brightness);
+    applySaturation(design.saturation);
+    applyMetalness(design.metalness);
+    applyBevel(design.bevel);
+    applyCubeScale(design.scale);
+  });
+
+  syncDesignUI();
 }
 
 // Boot — the landing page (index.html) is the puzzle picker now; it links here
