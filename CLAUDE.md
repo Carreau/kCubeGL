@@ -27,7 +27,7 @@ npm run test:api       # Backend API test only (no browser; fast)
 npm run test:smoke     # Headless Playwright end-to-end test only
 ```
 
-**Requires Node ≥ 22.5** for the backend (built-in `node:sqlite`; also declared in `package.json` `engines`). No build step and no native dependency: ES modules are served directly, Three.js loads from a CDN at runtime, and the server uses only Node built-ins. The DB file `server/kcube.sqlite` is created on first run (gitignored). Set `KCUBE_DB=:memory:` for an ephemeral DB (the tests do this).
+**Requires Node ≥ 22.5** for the backend (built-in `node:sqlite`; also declared in `package.json` `engines`). Today there is no build step: ES modules are served directly, Three.js loads from a CDN at runtime, and the server runs on Node built-ins — but this is a convenience, not a hard rule, and npm dependencies or a build step are acceptable (see Important Constraints). The DB file `server/kcube.sqlite` is created on first run (gitignored). Set `KCUBE_DB=:memory:` for an ephemeral DB (the tests do this).
 
 **Auth & deploy env vars:** `KCUBE_ADMIN_TOKEN` (a bootstrap secret) is the only way to mint an admin — `POST /api/users` grants admin only when its `adminToken` field matches it; if unset, no new admins can be created via the API. `KCUBE_TRUST_PROXY=1` (or `true`) tells the server to trust `X-Forwarded-Host`/`X-Forwarded-Proto` (used to derive the WebAuthn origin/RP-ID); set it behind a TLS-terminating reverse proxy or passkeys/origins will be wrong.
 
@@ -57,7 +57,7 @@ npm run test:smoke     # Headless Playwright end-to-end test only
 - **server/server.mjs** — `node:http` server: serves static files and routes `/api/*` to JSON handlers.
 - **server/db.mjs** — `node:sqlite` data layer: schema, catalogue seeding (`seedCatalog`) and all queries, including the leaderboard, puzzle-difficulty and player-skill aggregates.
 - **server/webauthn.mjs** — WebAuthn/passkey helpers (challenge generation, registration and assertion verification) backing the `/api/auth/passkey/*` endpoints.
-- **server/password.mjs** — Password hashing with `node:crypto` scrypt (no native argon2 dependency — the Docker image runs without `npm install`). Stores self-describing `scrypt:N:r:p:salt:hash` strings; verification is constant-time and never throws.
+- **server/password.mjs** — Password hashing with `node:crypto` scrypt. Stores self-describing `scrypt:N:r:p:salt:hash` strings; verification is constant-time and never throws.
 
 **Testing:**
 - **test/api.mjs** — Boots the server against an in-memory DB and drives the API with `fetch` (no browser). The fast, primary backend test.
@@ -146,8 +146,8 @@ Other animations (overlay fade, cube scale on win) use CSS transitions.
 
 ## Important Constraints
 
-- **No bundler or build step** — serves as raw ES modules; Three.js must be available at runtime. The backend likewise uses only Node built-ins (no native deps), preserving the no-install spirit.
-- **Node ≥ 22.5** — the backend depends on the built-in `node:sqlite` module. CI runs on Node 22.
+- **Dependencies are allowed** — the project no longer enforces a zero-dependency / no-build-step rule. It still ships today as raw ES modules with Three.js loaded from a CDN and a server on Node built-ins, but adding npm dependencies, a bundler, or a build step is fine when it earns its keep (e.g. a battle-tested CBOR/WebAuthn library in place of a hand-rolled one). If you introduce a build step, wire it into `package.json` scripts and CI so `npm run check`/`npm test` stay green.
+- **Node ≥ 22.5** — the backend uses the built-in `node:sqlite` module. CI runs on Node 22.
 - **Shared code stays pure** — `src/shared.mjs` is imported by both browser and server, so it must not import Three.js or touch the DOM.
 - **Backend is the norm, client is resilient** — the server is the source of truth, but `src/api.mjs` calls must stay best-effort (no-op to null on failure) so a brief outage falls back to the cold-start cache (deterministic catalogue + `localStorage`) instead of breaking. Don't over-rely on the DB on the hot path, and don't bake in hard assumptions that the server is *always* reachable.
 - **Deterministic puzzles** — keep all catalogue and board-generation randomness on the seeded PRNGs (`CATALOG_SEED` in `buildCatalog`, `config.seed` in `generateLevel`); never `Math.random()` in those paths, or puzzles/names diverge across users and leaderboards break.

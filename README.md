@@ -16,9 +16,10 @@ npm start            # full app + accounts + leaderboards, http://localhost:8080
 
 `npm start` runs a small Node server (`server/server.mjs`) that serves the game
 **and** a JSON API backed by SQLite. It needs **Node ≥ 22.5** — the backend uses
-the built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html) module, so there
-is **no native dependency and no `npm install`** for the server itself. The
-database file (`server/kcube.sqlite`) is created on first run.
+the built-in [`node:sqlite`](https://nodejs.org/api/sqlite.html) module. Today the
+server runs with no npm dependencies, though that's a convenience rather than a
+hard rule — adding dependencies or a build step is fine. The database file
+(`server/kcube.sqlite`) is created on first run.
 
 Then open <http://localhost:8080>, pick a puzzle, and play.
 
@@ -38,7 +39,7 @@ python3 -m http.server 8080
 ```
 
 Three.js is loaded from a CDN at runtime (in your browser), so no build step is
-required either way.
+required today — though one can be added if the project grows to need it.
 
 ## Puzzles, accounts & leaderboards
 
