@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { Reflector } from "three/addons/objects/Reflector.js";
 import {
   buildCatalog, catalogByName, gravatarUrl, gravatarUrlForHash, COLORS,
   BOARD, NEI, OPPOSITE, inBounds, cubeAt, cellsConnected,
@@ -31,7 +32,7 @@ const HALF = S / 2;
 const ROLL_MS = 170; // duration of a roll animation
 const STORE_KEY = "kcube.v1"; // localStorage key for persisted scores
 const DESIGN_KEY = "kcube.design";
-const DESIGN_DEFAULTS = { brightness: 1, saturation: 1, metalness: 0.05, bevel: 0.08, scale: 1 };
+const DESIGN_DEFAULTS = { brightness: 1, saturation: 1, metalness: 0.05, boardMetalness: 0.40, bevel: 0.08, scale: 1 };
 function loadDesign() {
   try { return { ...DESIGN_DEFAULTS, ...JSON.parse(localStorage.getItem(DESIGN_KEY)) }; }
   catch { return { ...DESIGN_DEFAULTS }; }
@@ -301,8 +302,8 @@ scene.add(boardGroup);
 const baseGeo = new THREE.BoxGeometry(BOARD * S + 0.5, 0.4, BOARD * S + 0.5);
 const baseMat = new THREE.MeshStandardMaterial({
   color: SCENE_THEME[initTheme()].base,
-  roughness: Math.max(0.25, 0.9 - design.metalness * 0.6),
-  metalness: design.metalness * 0.4,
+  roughness: Math.max(0.25, 0.9 - design.boardMetalness * 0.6),
+  metalness: design.boardMetalness * 0.4,
 });
 const base = new THREE.Mesh(baseGeo, baseMat);
 base.position.y = -0.2 - 0.001;
@@ -319,8 +320,8 @@ const tileMats = []; // [{ mat, dark }] — `dark` marks the checker parity so a
       const dark = (r + c) % 2 === 1;
       const mat = new THREE.MeshStandardMaterial({
         color: dark ? t.tileB : t.tileA,
-        roughness: Math.max(0.2, 0.85 - design.metalness * 0.55),
-        metalness: design.metalness * 0.4,
+        roughness: Math.max(0.2, 0.85 - design.boardMetalness * 0.55),
+        metalness: design.boardMetalness * 0.4,
       });
       const tile = new THREE.Mesh(tileGeo, mat);
       tile.position.set(cellX(c), -0.06, cellZ(r));
@@ -330,6 +331,33 @@ const tileMats = []; // [{ mat, dark }] — `dark` marks the checker parity so a
     }
   }
 }
+
+// Mirror reflector sitting just above the tile surface; opacity controlled by the
+// "Board shine" slider. The shader is patched to expose an opacity uniform so it
+// can fade smoothly from invisible (matte) to fully mirror-like.
+const boardReflector = (() => {
+  const geo = new THREE.PlaneGeometry(BOARD * S, BOARD * S);
+  const r = new Reflector(geo, {
+    clipBias: 0.003,
+    textureWidth: 512,
+    textureHeight: 512,
+    color: 0x888888,
+  });
+  r.rotation.x = -Math.PI / 2;
+  r.position.y = 0.002;
+  r.material.transparent = true;
+  r.material.uniforms.opacity = { value: design.boardMetalness };
+  r.material.fragmentShader = r.material.fragmentShader
+    .replace('uniform vec3 color;', 'uniform vec3 color;\nuniform float opacity;')
+    .replace(
+      'gl_FragColor = vec4( blendOverlay( base.rgb, color ), 1.0 );',
+      'gl_FragColor = vec4( blendOverlay( base.rgb, color ), opacity );',
+    );
+  r.material.needsUpdate = true;
+  r.visible = design.boardMetalness > 0;
+  boardGroup.add(r);
+  return r;
+})();
 
 // Recolour the renderer background, board, tiles, and every cube's face seams
 // for the given theme. Cube face maps are rebuilt (the old textures disposed).
@@ -1184,7 +1212,12 @@ function applyMetalness(v) {
     m.roughness = Math.max(0.1, 0.55 - v * 0.45);
     m.needsUpdate = true;
   });
-  // Board surfaces are inherently matte; scale down more gently than the cubes.
+}
+
+function applyBoardMetalness(v) {
+  boardReflector.visible = v > 0;
+  boardReflector.material.uniforms.opacity.value = v;
+  boardReflector.material.needsUpdate = true;
   baseMat.metalness = v * 0.4;
   baseMat.roughness = Math.max(0.25, 0.9 - v * 0.6);
   baseMat.needsUpdate = true;
@@ -1212,11 +1245,12 @@ function applyCubeScale(v) {
       document.getElementById(id).value = v;
       document.getElementById(valId).textContent = v.toFixed(decimals);
     };
-    set("ds-brightness", "dv-brightness", design.brightness, 2);
-    set("ds-saturation", "dv-saturation", design.saturation, 2);
-    set("ds-metalness",  "dv-metalness",  design.metalness,  2);
-    set("ds-bevel",      "dv-bevel",      design.bevel,      2);
-    set("ds-scale",      "dv-scale",      design.scale,      2);
+    set("ds-brightness",      "dv-brightness",      design.brightness,      2);
+    set("ds-saturation",      "dv-saturation",      design.saturation,      2);
+    set("ds-metalness",       "dv-metalness",       design.metalness,       2);
+    set("ds-board-metalness", "dv-board-metalness", design.boardMetalness,  2);
+    set("ds-bevel",           "dv-bevel",           design.bevel,           2);
+    set("ds-scale",           "dv-scale",           design.scale,           2);
   }
 
   function wireSlider(sliderId, valId, key, fn, decimals) {
@@ -1229,11 +1263,12 @@ function applyCubeScale(v) {
     });
   }
 
-  wireSlider("ds-brightness", "dv-brightness", "brightness", applyBrightness, 2);
-  wireSlider("ds-saturation", "dv-saturation", "saturation", applySaturation, 2);
-  wireSlider("ds-metalness",  "dv-metalness",  "metalness",  applyMetalness,  2);
-  wireSlider("ds-bevel",      "dv-bevel",      "bevel",      applyBevel,      2);
-  wireSlider("ds-scale",      "dv-scale",      "scale",      applyCubeScale,  2);
+  wireSlider("ds-brightness",      "dv-brightness",      "brightness",     applyBrightness,     2);
+  wireSlider("ds-saturation",      "dv-saturation",      "saturation",     applySaturation,     2);
+  wireSlider("ds-metalness",       "dv-metalness",       "metalness",      applyMetalness,      2);
+  wireSlider("ds-board-metalness", "dv-board-metalness", "boardMetalness", applyBoardMetalness, 2);
+  wireSlider("ds-bevel",           "dv-bevel",           "bevel",          applyBevel,          2);
+  wireSlider("ds-scale",           "dv-scale",           "scale",          applyCubeScale,      2);
 
   el.designBtn.addEventListener("click", () => {
     el.designPanel.classList.remove("hidden");
@@ -1251,6 +1286,7 @@ function applyCubeScale(v) {
     applyBrightness(design.brightness);
     applySaturation(design.saturation);
     applyMetalness(design.metalness);
+    applyBoardMetalness(design.boardMetalness);
     applyBevel(design.bevel);
     applyCubeScale(design.scale);
   });
