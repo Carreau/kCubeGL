@@ -27,8 +27,8 @@ import { DIRS as GEN_DIRS, qAxisAngle, qMul, quatToFaces } from "./level-gen.mjs
 const DIRS = Object.keys(GEN_DIRS); // ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"]
 
 const ROLL_PERM = {};
-const ROLL_DR = {};
-const ROLL_DC = {};
+export const ROLL_DR = {};
+export const ROLL_DC = {};
 {
   const IDENTITY = [0, 0, 0, 1];
   const idFaces = quatToFaces(IDENTITY); // 6 distinct colour ids, one per slot
@@ -55,7 +55,9 @@ function isContiguous(cubes) {
   return getIsland(cubes, cubes[0].id).length === cubes.length;
 }
 
-function isWon(state, targetColor = null) {
+// Exported for catalog-solve's win-replay verification (same win rule and the
+// same derived roll permutations the solvers — and therefore the game — use).
+export function isWon(state, targetColor = null) {
   const { cubes } = state;
   if (!cubes.length) return false;
   const t = targetColor ?? topColor(cubes[0]);
@@ -63,7 +65,7 @@ function isWon(state, targetColor = null) {
 }
 
 // Immutable single-roll application; cursor follows the rolled cube.
-function applyRoll(state, cubeId, dir) {
+export function applyRoll(state, cubeId, dir) {
   const perm = ROLL_PERM[dir];
   const dr = ROLL_DR[dir], dc = ROLL_DC[dir];
   return {

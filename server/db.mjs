@@ -23,16 +23,16 @@
  * ========================================================================== */
 
 import { DatabaseSync } from "node:sqlite";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { buildCatalog, gravatarHash } from "../src/shared.mjs";
-import { solveCatalogPuzzle } from "../src/catalog-solve.mjs";
+import { solveCatalogPuzzle, replayMoves } from "../src/catalog-solve.mjs";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id             INTEGER PRIMARY KEY,
   username       TEXT NOT NULL,
   username_lower TEXT NOT NULL UNIQUE,   -- case-insensitive uniqueness
-  token          TEXT NOT NULL UNIQUE,   -- bearer token (this app's only secret)
+  token          TEXT NOT NULL UNIQUE,   -- sha256 of the bearer token (never the token itself)
   created_at     INTEGER NOT NULL,
   is_admin       INTEGER NOT NULL DEFAULT 0,
   -- Gravatar hash derived from the player's email. We hash the email and keep
@@ -93,6 +93,13 @@ CREATE INDEX IF NOT EXISTS idx_attempts_won         ON attempts(puzzle_id, outco
 
 const now = () => Date.now();
 
+// Bearer tokens are stored hashed (like passwords): a leaked DB dump must not
+// hand out live sessions. The token itself exists only in the response that
+// minted it; lookups hash the presented token and match on the digest. The
+// "sha256:" prefix makes rows self-describing (and lets the legacy-plaintext
+// migration in openDb know which rows still need hashing).
+const hashToken = (t) => "sha256:" + createHash("sha256").update(t).digest("base64url");
+
 // A "this id doesn't exist" error the routing layer can map to 404, distinct
 // from an unexpected failure (which should surface as a 500).
 function notFound(id) {
@@ -120,6 +127,13 @@ export function openDb(path = process.env.KCUBE_DB || "server/kcube.sqlite") {
   addColumn("puzzles", "color_beams", "TEXT");
   addColumn("users", "password_hash", "TEXT");
   addColumn("webauthn_challenges", "type", "TEXT");
+  // One-time migration: DBs written before tokens were hashed at rest hold the
+  // plaintext token. Hash those rows in place — sha256 is deterministic, so
+  // every existing session keeps working.
+  const legacy = db.prepare("SELECT id, token FROM users WHERE token NOT LIKE 'sha256:%'").all();
+  for (const u of legacy) {
+    db.prepare("UPDATE users SET token = ? WHERE id = ?").run(hashToken(u.token), u.id);
+  }
   const wrapped = new Db(db);
   wrapped.seedCatalog();
   return wrapped;
@@ -132,6 +146,7 @@ export class Db {
   /* --- users --------------------------------------------------------------- */
 
   // Register a username, returning { id, username, token, isAdmin, avatarHash }.
+  // The returned token is the only copy in existence — the DB stores its hash.
   // An optional email links a real Gravatar — we hash it and store ONLY the hash
   // (never the raw address). Throws an Error with .code === "DUP" if the name
   // (case-insensitively) is taken. Admin is granted only when the caller proves
@@ -143,7 +158,7 @@ export class Db {
     try {
       const r = this.db
         .prepare("INSERT INTO users (username, username_lower, token, created_at, is_admin, avatar_hash, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(username, username.toLowerCase(), token, now(), isAdmin, avatarHash, passwordHash);
+        .run(username, username.toLowerCase(), hashToken(token), now(), isAdmin, avatarHash, passwordHash);
       return { id: Number(r.lastInsertRowid), username, token, isAdmin: isAdmin === 1, avatarHash, hasPassword: !!passwordHash };
     } catch (e) {
       if (/UNIQUE/i.test(String(e && e.message))) {
@@ -155,14 +170,16 @@ export class Db {
     }
   }
 
-  // Returns the full user row for password-based login (includes password_hash and token).
+  // Returns the user row for password-based login (includes password_hash).
+  // No token here: the stored value is a hash, so a successful login mints a
+  // fresh token via rotateToken instead of echoing a stored one.
   getUserByUsername(username) {
     if (!username) return null;
     const row = this.db.prepare(
-      "SELECT id, username, token, is_admin AS isAdmin, password_hash FROM users WHERE username_lower = ?"
+      "SELECT id, username, is_admin AS isAdmin, password_hash FROM users WHERE username_lower = ?"
     ).get(username.toLowerCase());
     if (!row) return null;
-    return { id: row.id, username: row.username, token: row.token, isAdmin: row.isAdmin === 1, passwordHash: row.password_hash };
+    return { id: row.id, username: row.username, isAdmin: row.isAdmin === 1, passwordHash: row.password_hash };
   }
 
   // Set or clear a user's password hash. Pass null to remove password login.
@@ -170,18 +187,19 @@ export class Db {
     this.db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(passwordHash, userId);
   }
 
-  // Mint a fresh bearer token for a user, invalidating the old one. Used when
-  // an admin resets a password: without rotation, a leaked token would survive
-  // the reset and keep full account access indefinitely.
+  // Mint a fresh bearer token for a user, invalidating the old one (only the
+  // hash is stored). Used on every password/passkey login — the stored hash
+  // can't be reversed into a token to echo back — and by the admin password
+  // reset, where rotation is the point: a leaked token must not survive it.
   rotateToken(userId) {
     const token = randomBytes(24).toString("base64url");
-    this.db.prepare("UPDATE users SET token = ? WHERE id = ?").run(token, userId);
+    this.db.prepare("UPDATE users SET token = ? WHERE id = ?").run(hashToken(token), userId);
     return token;
   }
 
   userByToken(token) {
     if (!token) return null;
-    const row = this.db.prepare("SELECT id, username, is_admin, avatar_hash FROM users WHERE token = ?").get(token);
+    const row = this.db.prepare("SELECT id, username, is_admin, avatar_hash FROM users WHERE token = ?").get(hashToken(token));
     if (!row) return null;
     return { id: row.id, username: row.username, isAdmin: row.is_admin === 1, avatarHash: row.avatar_hash ?? null };
   }
@@ -195,11 +213,12 @@ export class Db {
     return { avatarHash: hash };
   }
 
-  // Returns full user info including token (for passkey login).
+  // Returns full user info (for passkey login; the login mints a fresh token
+  // via rotateToken — the stored hash can't be echoed back).
   getUserByIdFull(userId) {
-    const row = this.db.prepare("SELECT id, username, token, is_admin FROM users WHERE id = ?").get(userId);
+    const row = this.db.prepare("SELECT id, username, is_admin FROM users WHERE id = ?").get(userId);
     if (!row) return null;
-    return { id: row.id, username: row.username, token: row.token, isAdmin: row.is_admin === 1 };
+    return { id: row.id, username: row.username, isAdmin: row.is_admin === 1 };
   }
 
   /* --- passkeys --------------------------------------------------------------- */
@@ -330,6 +349,20 @@ export class Db {
     this.db.prepare(
       "UPDATE puzzles SET optimal = ? WHERE id = ? AND (optimal IS NULL OR optimal > ?)"
     ).run(optimal, puzzleId, optimal);
+  }
+
+  // Verify a claimed win by replaying the player's recorded cursor path
+  // (R/L/U/D codes) against this puzzle's deterministic board. Returns
+  // { rolls, won } (rolls = paid tip-overs; free cursor switches excluded) or
+  // null when the sequence is impossible. Cheap enough for the submit path:
+  // regenerating the board plus ≤4096 replay steps is well under a millisecond.
+  replayWin(puzzleId, moveSeq) {
+    const row = this.puzzleById(puzzleId);
+    if (!row) return null;
+    return replayMoves(
+      { seed: row.seed, numCubes: row.num_cubes, scramble: row.scramble },
+      moveSeq
+    );
   }
 
   // Run the solvers (full/BFS + beam) for one puzzle and persist the results.

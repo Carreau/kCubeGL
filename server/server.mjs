@@ -107,6 +107,9 @@ const cleanName = (v) => {
   return /^[a-z0-9-]{1,64}$/.test(s) ? s : null;
 };
 const VALID_OUTCOME = new Set(["won", "lost", "abandoned"]);
+// Stored cursor-path cap. Generous: budgets top out around ~100 paid rolls, and
+// free cursor switches are the only way past a few hundred codes in practice.
+const MOVE_SEQ_MAX = 4096;
 
 // Bootstrap secret: a user who presents this at registration becomes admin.
 // Unset (the default) means no new admins can be minted via the API. Read at
@@ -433,38 +436,34 @@ const ROUTES = [
     // Clamp into sane ranges: moveSeq is capped at 4096 rolls, and no attempt
     // plausibly runs a week — uncapped values would let one bogus submission
     // skew the avgMoves/avgDuration difficulty aggregates arbitrarily.
-    const MAX_MOVES = 4096, MAX_DURATION_MS = 7 * 24 * 3600 * 1000;
-    const movesUsed = Math.min(MAX_MOVES, Math.max(0, toInt(body.movesUsed) ?? 0));
+    const MAX_DURATION_MS = 7 * 24 * 3600 * 1000;
+    const movesUsed = Math.min(MOVE_SEQ_MAX, Math.max(0, toInt(body.movesUsed) ?? 0));
     const durationMs = Math.min(MAX_DURATION_MS, Math.max(0, toInt(body.durationMs) ?? 0));
     // Player's recorded cursor path (R/L/U/D). Keep only the four codes and cap
     // the length so a stray/oversized payload can't bloat the row.
-    const moveSeq = typeof body.moveSeq === "string"
-      ? body.moveSeq.replace(/[^RLUD]/g, "").slice(0, 4096) || null
-      : null;
-    // Win submissions feed best-scores and the world record, so sanity-check
-    // them. (A full server-side replay of moveSeq isn't possible: the client
-    // may omit it, and the recorded path mixes free cursor switches with paid
-    // rolls — so we enforce the sound bounds we do have.)
+    const rawSeq = typeof body.moveSeq === "string" ? body.moveSeq.replace(/[^RLUD]/g, "") : "";
+    const moveSeq = rawSeq.slice(0, MOVE_SEQ_MAX) || null;
+    // Wins feed best-scores and the world record, so they are not taken on
+    // trust: the recorded path is REPLAYED against the server's own copy of
+    // the deterministic board (db.replayWin), and the claim is accepted only
+    // if the sequence is legal, ends solved, and its paid roll count matches
+    // movesUsed exactly. A truncated sequence can't be verified, so a path
+    // past the cap rejects the win rather than silently storing a corrupt one.
     if (body.outcome === "won") {
       const mu = toInt(body.movesUsed);
-      // A win always costs at least one roll.
       if (mu == null || mu < 1) return sendJson(res, 400, { error: "bad movesUsed for a win" });
-      // The recorded cursor path contains one code per roll (plus free cursor
-      // switches), so when present it can never be shorter than movesUsed.
-      if (moveSeq && moveSeq.length < mu) {
-        return sendJson(res, 400, { error: "move sequence inconsistent with movesUsed" });
+      if (!moveSeq || rawSeq.length > MOVE_SEQ_MAX) {
+        return sendJson(res, 400, { error: "a win needs its recorded move sequence" });
       }
-      // No legitimate win can beat the BFS-proven optimal (when it's known).
-      const pz = db.puzzleById(puzzleId);
-      if (pz && pz.full_optimal != null && mu < pz.full_optimal) {
-        return sendJson(res, 400, { error: "movesUsed below the proven optimal" });
+      const replay = db.replayWin(puzzleId, moveSeq);
+      if (!replay || !replay.won || replay.rolls !== mu) {
+        return sendJson(res, 400, { error: "move sequence does not replay to that win" });
       }
     }
     const prevBest = db.userBest(user.id, puzzleId); // before recording this outcome
     db.finishAttempt(id, user.id, { outcome: body.outcome, movesUsed, durationMs, moveSeq });
-    // A validated win is the only client input allowed to improve the
-    // shortest-known-solve (recordOptimal re-checks the bounds, incl. the
-    // BFS-proven floor when known).
+    // A replay-verified win is the only client input allowed to improve the
+    // shortest-known-solve (recordOptimal re-checks the bounds anyway).
     if (body.outcome === "won") db.recordOptimal(puzzleId, movesUsed);
     return sendJson(res, 200, {
       best: db.userBest(user.id, puzzleId),
@@ -561,7 +560,11 @@ const ROUTES = [
         db.updatePasskeyCounter(credentialId, counter);
         const user = db.getUserByIdFull(passkey.user_id);
         if (!user) return sendJson(res, 500, { error: 'user not found' });
-        return sendJson(res, 200, { token: user.token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
+        // Tokens are stored hashed, so a login can't echo the old one back —
+        // it mints a fresh token (signing other devices out; the single-token
+        // model has always meant one live session per account).
+        const token = db.rotateToken(user.id);
+        return sendJson(res, 200, { token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
       } catch (e) {
         console.error("[kcube] passkey login failed", e);
         return sendJson(res, 400, { error: "passkey login failed" });
@@ -579,7 +582,10 @@ const ROUTES = [
       // Always run verify (even against a dummy hash) to prevent user-enumeration via timing.
       const valid = await verifyPassword(user?.passwordHash ?? dummyHash, password);
       if (!valid || !user?.passwordHash) return sendJson(res, 401, { error: 'invalid credentials' });
-      return sendJson(res, 200, { token: user.token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
+      // Tokens are stored hashed, so a login mints a fresh one (see the
+      // passkey login above for the trade-off).
+      const token = db.rotateToken(user.id);
+      return sendJson(res, 200, { token, username: user.username, userId: user.id, isAdmin: user.isAdmin });
     } },
 
   // GET /api/admin/users

@@ -337,6 +337,7 @@ const game = {
   bonus: 0, // carried-over moves earned by clearing puzzles
   cubes: [],
   selected: null, // index into cubes
+  initialSelected: 0, // the generator's opening cursor (Retry restores this)
   moves: 0, // remaining move budget
   startMoves: 0, // budget the level started with (restored on Retry)
   movesUsed: 0, // rolls spent this level (the score)
@@ -461,6 +462,11 @@ function buildLevel(config) {
   // Start the cursor on the last-scrambled cube (solution[0].cube) so par is
   // reachable from the opening position, not just by "show solution".
   game.selected = gen.cursorIndex;
+  // Remember it: Retry must restore THIS cursor, not the (possibly
+  // solver-improved) solution's first cube — the server replays recorded wins
+  // from the generator's opening cursor, so a different start would make a
+  // legitimate retry win unverifiable.
+  game.initialSelected = gen.cursorIndex;
   game.solving = false;
   game.solveQueue = [];
   game.walk = null;
@@ -953,11 +959,10 @@ function retryLevel() {
     game.moves = game.startMoves;
     game.movesUsed = 0;
     game.userMoves = []; // replaying the same board ⇒ start recording afresh
-    // Same opening cursor as a fresh build — on the first solution cube, so par
-    // is reachable from the start (cubes[0] often sits in a different island).
-    game.selected = game.solution.length
-      ? game.cubes.indexOf(game.solution[0].cube)
-      : 0;
+    // Same opening cursor as a fresh build (the generator's cursorIndex — NOT
+    // solution[0].cube, which tryImproveWithSolver may have replaced with a
+    // different opening cube; the server verifies wins from the former).
+    game.selected = game.initialSelected;
     game.solving = false;
     game.solveQueue = [];
     game.walk = null;
