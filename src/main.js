@@ -191,13 +191,17 @@ function topColor(quat) {
   return quatToFaces(quat.toArray())[2];
 }
 
-/* Create cube geometry with optional beveling. Rebuild per-face material groups
- * (BoxGeometry order: +X,-X,+Y,-Y,+Z,-Z) by classifying each triangle to the
- * face its centroid points toward. */
+/* Create cube geometry with optional beveling. For "sharp", a plain BoxGeometry
+ * already carries the 6 per-face material groups in the order we need
+ * (+X,-X,+Y,-Y,+Z,-Z). For "rounded", RoundedBoxGeometry is single-material and
+ * non-indexed (every 3 consecutive vertices form one triangle), so we rebuild
+ * the groups by classifying each triangle to the face its centroid points
+ * toward — the bevel is slight, so colouring the thin rounded edges by nearest
+ * face reads cleanly. That triangle walk is only valid on non-indexed geometry;
+ * do not run it on BoxGeometry, which is indexed. */
 function bevelledCubeGeometry(size, radius, segments, bevelType = "rounded") {
-  const geo = bevelType === "rounded"
-    ? new RoundedBoxGeometry(size, size, size, segments, radius)
-    : new THREE.BoxGeometry(size, size, size, segments, segments, segments);
+  if (bevelType !== "rounded") return new THREE.BoxGeometry(size, size, size);
+  const geo = new RoundedBoxGeometry(size, size, size, segments, radius);
 
   const pos = geo.attributes.position;
   const faceOf = (x, y, z) => {
